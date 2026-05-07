@@ -1,0 +1,28 @@
+# Airflow providers (compatible with Airflow 2.10.4)
+apache-airflow-providers-postgres==5.13.0
+apache-airflow-providers-http==4.13.1
+apache-airflow-providers-amazon==8.29.0
+apache-airflow-providers-apache-spark==4.10.0
+apache-airflow-providers-celery==3.8.3
+
+# Data processing libraries
+pyspark==3.5.0
+
+# Database connectivity
+psycopg2-binary==2.9.10
+sqlalchemy==1.4.54
+
+# Kafka and streaming
+confluent-kafka==2.6.1
+kafka-python==2.0.2
+
+# Utilities
+requests==2.32.3
+python-dateutil==2.9.0
+pytz==2024.2
+
+# AWS / MinIO
+boto3==1.34.90
+botocore==1.34.90
+
+pyarrow==14.0.2

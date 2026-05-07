@@ -1,0 +1,10 @@
+FROM minio/mc:latest
+
+# Copy the initialization script
+COPY minio-init.sh /usr/local/bin/minio-init.sh
+
+# Make the script executable
+RUN chmod +x /usr/local/bin/minio-init.sh
+
+# Set the entrypoint to run our initialization script
+ENTRYPOINT ["/usr/local/bin/minio-init.sh"]

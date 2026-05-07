@@ -1,0 +1,264 @@
+{
+    "warnings": [
+        "limit is higher than your plan allows"
+    ],
+    "meta": {
+        "found": 158830,
+        "returned": 3,
+        "limit": 3,
+        "page": 1
+    },
+    "data": [
+        {
+            "uuid": "5ed89c9d-6601-41d6-b52d-3f4e253ed7f8",
+            "title": "Tesla Earnings Preview: Why The Dream Is Breaking Down (NASDAQ:TSLA)",
+            "description": "Tesla, Inc. gets a Strong Sell as deliveries miss, inventory hits 35 days, and margins/FCF weaken amid $20B+ 2026 CapEx risk. Click for this TSLA update.",
+            "keywords": "",
+            "snippet": "I'm not short on Tesla, Inc. ( TSLA ), and I don't need to be. All I need to do is avoid buying the stock. The market currently believes Tesla is worth approxim...",
+            "url": "https://seekingalpha.com/article/4891226-tesla-earnings-preview-why-the-dream-is-breaking-down",
+            "image_url": "https://static.seekingalpha.com/cdn/s3/uploads/getty_images/1485957894/image_1485957894.jpg?io=getty-c-w1536",
+            "language": "en",
+            "published_at": "2026-04-16T14:16:59.000000Z",
+            "source": "seekingalpha.com",
+            "relevance_score": null,
+            "entities": [
+                {
+                    "symbol": "TSLA",
+                    "name": "Tesla, Inc.",
+                    "exchange": null,
+                    "exchange_long": null,
+                    "country": "us",
+                    "type": "equity",
+                    "industry": "Consumer Cyclical",
+                    "match_score": 65.432594,
+                    "sentiment_score": 0.2116,
+                    "highlights": [
+                        {
+                            "highlight": "I'm not short on <em>Tesla</em>, <em>Inc[+84 characters]",
+                            "sentiment": -0.296,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "The market currently believes <em>Tesla<[+324 characters]",
+                            "sentiment": 0.6808,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "<em>Tesla</em> Earnings Preview: Why The Dream Is Breaking Down (<em>NASDAQ:TSLA</em>)",
+                            "sentiment": 0.25,
+                            "highlighted_in": "title"
+                        }
+                    ]
+                },
+                {
+                    "symbol": "TSLA.MX",
+                    "name": "Tesla, Inc.",
+                    "exchange": null,
+                    "exchange_long": null,
+                    "country": "mx",
+                    "type": "equity",
+                    "industry": "Consumer Cyclical",
+                    "match_score": 32.8721,
+                    "sentiment_score": 0.2116,
+                    "highlights": [
+                        {
+                            "highlight": "I'm not short on <em>Tesla</em>, <em>Inc[+84 characters]",
+                            "sentiment": -0.296,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "The market currently believes <em>Tesla<[+324 characters]",
+                            "sentiment": 0.6808,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "<em>Tesla</em> Earnings Preview: Why The Dream Is Breaking Down (NASDAQ:TSLA)",
+                            "sentiment": 0.25,
+                            "highlighted_in": "title"
+                        }
+                    ]
+                }
+            ],
+            "similar": []
+        },
+        {
+            "uuid": "3eca660c-a7f4-425f-90de-0ee4667569a0",
+            "title": "Should You Buy, Sell or Hold Tesla Stock at $390?",
+            "description": "Tesla (NASDAQ:TSLA) is a Hold at $390. The stock has down 11% year to date while the company navigates a painful transition: Automotive volumes are declining, costs are rising, and the next wave of growth catalysts remains largely unproven. The bull case is real, but so is the risk of paying a premium price for a ... Should You Buy, Sell or Hold Tesla Stock at $390?",
+            "keywords": "Tesla Semi, NVIDIA, Cybercab, top 10 AI stocks, TSLA, Tesla",
+            "snippet": "Quick Read\n\nTesla (TSLA) receives a Hold rating at $350, down 11% year to date amid volume declines.\n\nExecution risk on unrealized catalysts like Cybercab and r...",
+            "url": "https://finance.yahoo.com/markets/stocks/articles/buy-sell-hold-tesla-stock-134818022.html",
+            "image_url": "https://s.yimg.com/ny/api/res/1.2/rIWIJ_wK2_hSEr6is0yaaQ--/YXBwaWQ9aGlnaGxhbmRlcjt3PTEyMDA7aD04MDA-/https://media.zenfs.com/en/24_7_wall_st__718/f2d13342a1a8af7ac74b9bc573072995",
+            "language": "en",
+            "published_at": "2026-04-16T13:48:18.000000Z",
+            "source": "finance.yahoo.com",
+            "relevance_score": null,
+            "entities": [
+                {
+                    "symbol": "TSLA",
+                    "name": "Tesla, Inc.",
+                    "exchange": null,
+                    "exchange_long": null,
+                    "country": "us",
+                    "type": "equity",
+                    "industry": "Consumer Cyclical",
+                    "match_score": 32.11101,
+                    "sentiment_score": 0.29745,
+                    "highlights": [
+                        {
+                            "highlight": "Quick Read\n\n<em>Tesla</em> (TSLA) receiv[+325 characters]",
+                            "sentiment": 0.5904,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "<em>Tesla</em> operates across electric [+241 characters]",
+                            "sentiment": 0.5994,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Cybercab and <em>Tesla</em> Semi volume [+279 characters]",
+                            "sentiment": 0,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Should You Buy, Sell or Hold <em>Tesla</em> Stock at $390?",
+                            "sentiment": 0,
+                            "highlighted_in": "title"
+                        }
+                    ]
+                }
+            ],
+            "similar": []
+        },
+        {
+            "uuid": "62c19341-5956-4348-bc3b-4f68a57b292a",
+            "title": "Jim Cramer Says “Apple Never Really Went Anywhere”",
+            "description": "Apple Inc. (NASDAQ:AAPL) was among the stocks Jim Cramer discussed on Mad Money as he addressed investors’ recent overblown worries and growth stocks stuck in bear-market territory. Cramer was bullish on the stock during the episode, as he remarked: Alphabet got dinged last year. It’s come all the way back. Apple never really went anywhere. […]",
+            "keywords": "Jim Cramer, Apple Inc., growth stocks",
+            "snippet": "Apple Inc. (NASDAQ:AAPL) was among the stocks Jim Cramer discussed on Mad Money as he addressed investors’ recent overblown worries and growth stocks stuck in...",
+            "url": "https://finance.yahoo.com/markets/stocks/articles/jim-cramer-says-apple-never-133527178.html",
+            "image_url": "https://s.yimg.com/ny/api/res/1.2/cVvSOEVgXXeSO16E_nX5FQ--/YXBwaWQ9aGlnaGxhbmRlcjt3PTEyMDA7aD04MDA-/https://media.zenfs.com/en/insidermonkey.com/abe42548427d5976d59895bbd8b8797c",
+            "language": "en",
+            "published_at": "2026-04-16T13:35:27.000000Z",
+            "source": "finance.yahoo.com",
+            "relevance_score": null,
+            "entities": [
+                {
+                    "symbol": "APC.DE",
+                    "name": "Apple Inc.",
+                    "exchange": null,
+                    "exchange_long": null,
+                    "country": "de",
+                    "type": "equity",
+                    "industry": "Technology",
+                    "match_score": 31.333122,
+                    "sentiment_score": -0.15936,
+                    "highlights": [
+                        {
+                            "highlight": "<em>Apple</em> <em>Inc</em>. (NASDAQ:AAP[+334 characters]",
+                            "sentiment": -0.6597,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "brandon-romanchuk-NOFyRmSQfUQ-unsplash\n\n[+328 characters]",
+                            "sentiment": -0.2023,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "This morning, I tried frantically to fin[+213 characters]",
+                            "sentiment": 0.3612,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Turns out <em>Apple</em> was framed. You[+238 characters]",
+                            "sentiment": -0.296,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Jim Cramer Says “<em>Apple</em> Never Really Went Anywhere”",
+                            "sentiment": 0,
+                            "highlighted_in": "title"
+                        }
+                    ]
+                },
+                {
+                    "symbol": "AAPL",
+                    "name": "Apple Inc.",
+                    "exchange": null,
+                    "exchange_long": null,
+                    "country": "us",
+                    "type": "equity",
+                    "industry": "Technology",
+                    "match_score": 43.495193,
+                    "sentiment_score": -0.15936,
+                    "highlights": [
+                        {
+                            "highlight": "<em>Apple</em> <em>Inc</em>. (<em>NASDAQ[+343 characters]",
+                            "sentiment": -0.6597,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "brandon-romanchuk-NOFyRmSQfUQ-unsplash\n\n[+337 characters]",
+                            "sentiment": -0.2023,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "This morning, I tried frantically to fin[+213 characters]",
+                            "sentiment": 0.3612,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Turns out <em>Apple</em> was framed. You[+238 characters]",
+                            "sentiment": -0.296,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Jim Cramer Says “<em>Apple</em> Never Really Went Anywhere”",
+                            "sentiment": 0,
+                            "highlighted_in": "title"
+                        }
+                    ]
+                },
+                {
+                    "symbol": "AAPL.MX",
+                    "name": "Apple Inc.",
+                    "exchange": null,
+                    "exchange_long": null,
+                    "country": "mx",
+                    "type": "equity",
+                    "industry": "Technology",
+                    "match_score": 31.332577,
+                    "sentiment_score": -0.15936,
+                    "highlights": [
+                        {
+                            "highlight": "<em>Apple</em> <em>Inc</em>. (NASDAQ:AAP[+334 characters]",
+                            "sentiment": -0.6597,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "brandon-romanchuk-NOFyRmSQfUQ-unsplash\n\n[+328 characters]",
+                            "sentiment": -0.2023,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "This morning, I tried frantically to fin[+213 characters]",
+                            "sentiment": 0.3612,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Turns out <em>Apple</em> was framed. You[+238 characters]",
+                            "sentiment": -0.296,
+                            "highlighted_in": "main_text"
+                        },
+                        {
+                            "highlight": "Jim Cramer Says “<em>Apple</em> Never Really Went Anywhere”",
+                            "sentiment": 0,
+                            "highlighted_in": "title"
+                        }
+                    ]
+                }
+            ],
+            "similar": []
+        }
+    ]
+}
