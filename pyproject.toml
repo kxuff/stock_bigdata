@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Multi-agent investment advisory layer schema contract."
 requires-python = ">=3.11"
 dependencies = [
+    "crewai>=0.165,<1",
     "pydantic>=2.8,<3",
 ]
 
@@ -15,3 +16,6 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "live: tests that call the configured live LLM provider",
+]
