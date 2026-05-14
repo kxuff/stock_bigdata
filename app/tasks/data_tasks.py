@@ -1,8 +1,6 @@
 from typing import Any
 
 from app.crews.config_loader import crewai_task_config
-from app.schemas.agent_outputs import MarketDataAgentOutput
-from app.tasks.guardrails import validate_market_data_output
 
 try:
     from crewai import Task
@@ -15,9 +13,6 @@ def create_market_data_task(agent: Any) -> Any:
     return Task(
         config=crewai_task_config("market_data_task"),
         agent=agent,
-        output_pydantic=MarketDataAgentOutput,
-        guardrail=validate_market_data_output,
-        guardrail_max_retries=3,
     )
 
 

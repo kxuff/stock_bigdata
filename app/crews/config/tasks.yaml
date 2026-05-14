@@ -10,7 +10,8 @@ market_data_task:
   expected_output: >
     MarketDataAgentOutput JSON with status, summary, confidence,
     market_signals, ml_signal_available, missing_fields, limitations, and
-    source_refs.
+    source_refs. Return only valid JSON with no markdown fences. Example:
+    {"status":"SUCCESS","summary":"Market and ML signals were summarized from assigned tools.","confidence":0.65,"missing_fields":[],"limitations":[],"source_refs":["postgresql.real_time_prices:AAPL"],"market_signals":[{"symbol":"AAPL","stance":"BULLISH","confidence":0.65,"drivers":["trend_direction=UP"]}],"ml_signal_available":true}
   agent: market_data_agent
 
 sentiment_task:
@@ -24,7 +25,9 @@ sentiment_task:
     sentiment from market price, valuation, or risk data.
   expected_output: >
     SentimentAgentOutput JSON with sentiment_label, top_drivers,
-    missing_fields, limitations, confidence, and source_refs.
+    missing_fields, limitations, confidence, and source_refs. Return only valid
+    JSON with no markdown fences. Example:
+    {"status":"SKIPPED","summary":"Sentiment context is unavailable; no sentiment inference was made.","confidence":0.0,"missing_fields":["sentiment_snapshot"],"limitations":["SENTIMENT_CONTEXT_UNAVAILABLE"],"source_refs":[],"sentiment_label":"UNAVAILABLE","top_drivers":[]}
   agent: sentiment_agent
 
 valuation_task:
@@ -38,7 +41,9 @@ valuation_task:
     value, or similar claims unless the valuation tool provides them.
   expected_output: >
     ValuationAgentOutput JSON with valuation_label, valuation_drivers,
-    confidence, missing_fields, limitations, and source_refs.
+    confidence, missing_fields, limitations, and source_refs. Return only valid
+    JSON with no markdown fences. Example:
+    {"status":"SUCCESS","summary":"Valuation was assessed only from FundamentalsTool snapshots.","confidence":0.58,"missing_fields":[],"limitations":[],"source_refs":["spark.gold.fundamentals:AAPL"],"valuation_label":"FAIRLY_VALUED","valuation_drivers":["AAPL pe_ratio=31.2"]}
   agent: valuation_agent
 
 risk_task:
@@ -52,5 +57,31 @@ risk_task:
     moderate risk when risk data is missing.
   expected_output: >
     RiskAgentOutput JSON with risk_label, risk_factors, confidence_cap,
-    missing_fields, limitations, and source_refs.
+    missing_fields, limitations, and source_refs. Return only valid JSON with
+    no markdown fences. Example:
+    {"status":"SUCCESS","summary":"Risk was summarized from RiskFeatureTool and portfolio constraints.","confidence":0.78,"missing_fields":[],"limitations":[],"source_refs":["postgresql.risk_features:AAPL"],"risk_label":"MEDIUM","risk_factors":["large-cap technology concentration"],"confidence_cap":0.78}
   agent: risk_agent
+
+manager_synthesis_task:
+  description: >
+    Synthesize specialist task outputs into a decision draft for deterministic
+    policy services.
+
+    Use only the AdvisoryDecisionRequest and specialist outputs in task context.
+    Do not call unassigned tools, do not add external facts, and do not invent
+    missing metrics. Return JSON only. The downstream system will apply
+    source-quality caps, confidence aggregation, conflict resolution, financial
+    validation, human review, and audit metadata.
+    Enum constraints are strict: time_horizon must be one of INTRADAY,
+    SHORT_TERM, MEDIUM_TERM, LONG_TERM; proposed_recommendation must be one of
+    BUY, HOLD, SELL, WATCH; decision_rationale[].stance must be one of
+    BULLISH, BEARISH, NEUTRAL, MIXED; decision_rationale[].weight must be one
+    of LOW, MEDIUM, HIGH. Do not use synonyms such as CAUTIOUS, POSITIVE,
+    NEGATIVE, STRONG_BUY, or ACCUMULATE.
+  expected_output: >
+    ManagerSynthesisOutput JSON with summary, time_horizon,
+    proposed_recommendation or portfolio draft, decision_rationale,
+    supporting_signals, conflicting_signals, risk_warnings, limitations, and
+    data_citations. Return only valid JSON with no markdown fences. Example:
+    {"summary":"AAPL has constructive market evidence but limited valuation upside.","time_horizon":"SHORT_TERM","proposed_recommendation":"HOLD","decision_rationale":[{"factor":"market_signal","stance":"BULLISH","weight":"MEDIUM","explanation":"Technical and ML signals are mildly positive."}],"supporting_signals":["ML probability is modestly positive"],"conflicting_signals":["Valuation upside is limited"],"risk_warnings":["Technology concentration can increase volatility."],"limitations":[],"data_citations":["postgresql.real_time_prices:AAPL"]}
+  agent: manager_agent

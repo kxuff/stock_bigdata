@@ -5,8 +5,11 @@ description = "Multi-agent investment advisory layer schema contract."
 requires-python = ">=3.11"
 dependencies = [
     "crewai>=1.14.4,<2",
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
     "pydantic>=2.8,<3",
     "pyyaml>=6.0,<7",
+    "uvicorn>=0.34,<1",
 ]
 
 [dependency-groups]

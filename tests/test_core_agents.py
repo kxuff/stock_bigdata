@@ -6,12 +6,6 @@ from app.agents.risk_agent import analyze_risk, create_risk_agent
 from app.agents.sentiment_agent import analyze_sentiment, create_sentiment_agent
 from app.agents.valuation_agent import analyze_valuation, create_valuation_agent
 from app.crews.config_loader import load_agents_config, load_tasks_config
-from app.schemas.agent_outputs import (
-    MarketDataAgentOutput,
-    RiskAgentOutput,
-    SentimentAgentOutput,
-    ValuationAgentOutput,
-)
 from app.schemas.enums import AgentStatus, RiskLabel, SentimentLabel, ToolStatus, ValuationLabel
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle
@@ -38,10 +32,13 @@ def test_crewai_yaml_configs_define_specialists_and_prompt_boundaries() -> None:
         "sentiment_agent",
         "valuation_agent",
         "risk_agent",
+        "manager_agent",
     }
     assert tasks_config["market_data_task"]["agent"] == "market_data_agent"
+    assert tasks_config["manager_synthesis_task"]["agent"] == "manager_agent"
     assert "untrusted evidence" in tasks_config["sentiment_task"]["description"]
     assert "Do not infer valuation metrics" in tasks_config["valuation_task"]["description"]
+    assert "decision_rationale[].stance must be one of" in tasks_config["manager_synthesis_task"]["description"]
 
 
 def test_agent_factories_wire_yaml_config_and_read_only_tools() -> None:
@@ -74,7 +71,7 @@ def test_agent_factories_wire_yaml_config_and_read_only_tools() -> None:
     assert request.symbols == ["AAPL"]
 
 
-def test_task_factories_request_pydantic_structured_outputs() -> None:
+def test_task_factories_use_yaml_prompt_json_contracts() -> None:
     bundle = ToolResultBundle.model_validate(load_sample("normal_tool_results.json"))
     tools = build_mocked_upstream_tools(bundle)
     llm = "openai/gpt-4o-mini"
@@ -86,17 +83,19 @@ def test_task_factories_request_pydantic_structured_outputs() -> None:
     valuation_agent = create_valuation_agent(llm=llm, tools=[tools["valuation_snapshot"]])
     risk_agent = create_risk_agent(llm=llm, tools=[tools["risk_snapshot"]])
 
-    assert create_market_data_task(market_agent).output_pydantic is MarketDataAgentOutput
+    market_task = create_market_data_task(market_agent)
     sentiment_task = create_sentiment_task(sentiment_agent)
     valuation_task = create_valuation_task(valuation_agent)
     risk_task = create_risk_task(risk_agent)
 
-    assert sentiment_task.output_pydantic is SentimentAgentOutput
-    assert valuation_task.output_pydantic is ValuationAgentOutput
-    assert risk_task.output_pydantic is RiskAgentOutput
-    assert sentiment_task.guardrail is not None
-    assert valuation_task.guardrail is not None
-    assert risk_task.guardrail is not None
+    assert market_task.output_pydantic is None
+    assert sentiment_task.output_pydantic is None
+    assert valuation_task.output_pydantic is None
+    assert risk_task.output_pydantic is None
+    assert "Return only valid JSON" in market_task.expected_output
+    assert "Return only valid JSON" in sentiment_task.expected_output
+    assert "Return only valid JSON" in valuation_task.expected_output
+    assert "Return only valid JSON" in risk_task.expected_output
 
 
 def test_market_data_agent_output_uses_tool_results_without_inventing_metrics() -> None:

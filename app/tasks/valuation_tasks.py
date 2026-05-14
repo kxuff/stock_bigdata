@@ -1,8 +1,6 @@
 from typing import Any
 
 from app.crews.config_loader import crewai_task_config
-from app.schemas.agent_outputs import ValuationAgentOutput
-from app.tasks.guardrails import validate_valuation_output
 
 try:
     from crewai import Task
@@ -15,9 +13,6 @@ def create_valuation_task(agent: Any) -> Any:
     return Task(
         config=crewai_task_config("valuation_task"),
         agent=agent,
-        output_pydantic=ValuationAgentOutput,
-        guardrail=validate_valuation_output,
-        guardrail_max_retries=3,
     )
 
 

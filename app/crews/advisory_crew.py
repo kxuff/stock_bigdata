@@ -46,8 +46,12 @@ class AdvisorySpecialistCrew:
     ) -> None:
         self.llm = llm
         self.tools = tools
-        self.manager_agent = manager_agent
+        self._manager_agent = manager_agent
         self.verbose = verbose
+
+    @agent
+    def manager_agent(self) -> Any:
+        return self._manager_agent
 
     @agent
     def market_data_agent(self) -> Any:
@@ -103,7 +107,7 @@ class AdvisorySpecialistCrew:
         return Crew(
             agents=self.specialist_agents(),
             tasks=self.specialist_tasks(),
-            manager_agent=self.manager_agent,
+            manager_agent=self._manager_agent,
             process=Process.hierarchical,
             verbose=self.verbose,
         )

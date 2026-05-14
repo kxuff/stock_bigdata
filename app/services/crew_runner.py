@@ -1,32 +1,26 @@
-import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from app.agents.manager_agent import create_manager_agent
 from app.config import AgentSettings, load_settings
 from app.crews.advisory_crew import AdvisorySpecialistCrew
 from app.llm.llm_factory import create_deepseek_llm
 from app.schemas.decision import SingleSymbolDecision
+from app.schemas.manager_outputs import ManagerSynthesisOutput
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle
+from app.tasks.manager_tasks import create_manager_synthesis_task
+from app.validators.manager_synthesis_parser import parse_manager_synthesis_output
 from app.validators.output_repair import parse_model_output
 
 try:
-    from crewai import Agent, Crew, Process, Task
+    from crewai import Crew, Process
     from crewai.tools import BaseTool
 except ModuleNotFoundError:
-    Agent = None
     Crew = None
     Process = None
-    Task = None
     BaseTool = object
-
-
-COMMON_AGENT_RULES = (
-    "You must use only the user request and facts retrieved through assigned read-only tools. "
-    "Do not invent missing financial metrics. If a field is missing, return UNAVAILABLE and "
-    "explain the limitation. Every numerical claim must map to a source_ref or input field."
-)
 
 
 @dataclass
@@ -60,6 +54,26 @@ class HierarchicalCrewRunner:
         )
         return parse_model_output(raw_result, output_model)
 
+    def run_manager_synthesis(
+        self,
+        request: AdvisoryDecisionRequest,
+        tool_results: ToolResultBundle,
+    ) -> ManagerSynthesisOutput:
+        artifacts = self.build_crew(request, tool_results)
+        raw_result = artifacts.crew.kickoff(
+            inputs={
+                "request": request.model_dump(mode="json"),
+                "request_json": request.model_dump_json(),
+                "symbols": ", ".join(request.symbols),
+                "decision_mode": request.decision_mode.value,
+            }
+        )
+
+        pydantic_output = getattr(raw_result, "pydantic", None)
+        if isinstance(pydantic_output, ManagerSynthesisOutput):
+            return pydantic_output
+        return parse_manager_synthesis_output(raw_result, request)
+
     def build_crew(
         self,
         request: AdvisoryDecisionRequest,
@@ -69,19 +83,10 @@ class HierarchicalCrewRunner:
         llm = self.llm_factory(self.settings)
         tools = build_mocked_upstream_tools(tool_results)
 
-        manager_agent = Agent(
-            role="Investment Advisory Manager",
-            goal=(
-                "Coordinate specialist agents and synthesize grounded market, sentiment, valuation, "
-                "and risk signals into an explainable investment decision."
-            ),
-            backstory=(
-                f"{COMMON_AGENT_RULES} You are the lead investment reasoning agent. You never invent "
-                "financial metrics. You resolve conflicts and return structured JSON."
-            ),
+        manager_agent = create_manager_agent(
             llm=llm,
-            allow_delegation=True,
             verbose=self.verbose,
+            max_execution_time=self.settings.agent_timeout_seconds,
         )
 
         specialist_crew = AdvisorySpecialistCrew(
@@ -99,6 +104,8 @@ class HierarchicalCrewRunner:
             manager_agent=manager_agent,
             process=Process.hierarchical,
             verbose=self.verbose,
+            tracing=self.settings.crewai_tracing,
+            share_crew=self.settings.crewai_share_crew,
         )
 
         artifacts = CrewRunArtifacts(
@@ -172,24 +179,16 @@ class _StaticTool(BaseTool):
         return result.model_dump_json()
 
 
-def _build_manager_task(request: AdvisoryDecisionRequest, specialist_tasks: list[Any]) -> Any:
-    request_fingerprint = _stable_hash(request.model_dump(mode="json"))
-    return Task(
-        description=(
-            "Synthesize all specialist outputs into final advisory JSON. Respect decision_mode, "
-            "user constraints, citations, limitations, and the not_financial_advice=true boundary. "
-            f"Request fingerprint: {request_fingerprint}."
-        ),
-        expected_output="Final advisory response JSON matching the Pydantic decision schema.",
-        context=specialist_tasks,
+def _build_manager_task(
+    request: AdvisoryDecisionRequest,
+    specialist_tasks: list[Any],
+) -> Any:
+    return create_manager_synthesis_task(
+        request,
+        specialist_tasks,
     )
 
 
-def _stable_hash(payload: Any) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
 def _require_crewai() -> None:
-    if Agent is None or Crew is None or Process is None or Task is None:
+    if Crew is None or Process is None:
         raise RuntimeError("CrewAI is required for the hierarchical crew runner")

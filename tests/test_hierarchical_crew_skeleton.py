@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import AgentSettings
+from app.agents import manager_agent
 from app.schemas.decision import SingleSymbolDecision
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle
@@ -33,6 +34,9 @@ class FakeTask:
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
         self.agent = kwargs.get("agent")
+        self.output_pydantic = kwargs.get("output_pydantic")
+        config = kwargs.get("config", {})
+        self.expected_output = kwargs.get("expected_output") or config.get("expected_output")
 
 
 class FakeCrew:
@@ -50,8 +54,7 @@ class FakeCrew:
 
 
 def test_hierarchical_crew_uses_custom_manager_and_specialist_tools(monkeypatch) -> None:
-    monkeypatch.setattr(crew_runner, "Agent", FakeAgent)
-    monkeypatch.setattr(crew_runner, "Task", FakeTask)
+    monkeypatch.setattr(manager_agent, "Agent", FakeAgent)
     monkeypatch.setattr(crew_runner, "Crew", FakeCrew)
     monkeypatch.setattr(crew_runner, "Process", FakeProcess)
 
@@ -70,6 +73,9 @@ def test_hierarchical_crew_uses_custom_manager_and_specialist_tools(monkeypatch)
     assert artifacts.crew.process == FakeProcess.hierarchical
     assert artifacts.manager_agent not in artifacts.specialist_agents
     assert artifacts.manager_agent.allow_delegation is True
+    assert artifacts.manager_agent.role == "Investment Advisory Manager"
+    assert artifacts.crew.kwargs["tracing"] is True
+    assert artifacts.crew.kwargs["share_crew"] is False
     assert [agent.role for agent in artifacts.specialist_agents] == [
         "Market Data Analyst",
         "Financial Sentiment Analyst",
@@ -78,8 +84,9 @@ def test_hierarchical_crew_uses_custom_manager_and_specialist_tools(monkeypatch)
     ]
     assert [len(agent.tools) for agent in artifacts.specialist_agents] == [2, 1, 1, 2]
     assert len(artifacts.tasks) == 5
-    assert all(getattr(task, "output_pydantic", None) is not None for task in artifacts.tasks[:4])
-    assert artifacts.tasks[-1].kwargs["context"] == artifacts.tasks[:4]
+    assert all(getattr(task, "output_pydantic", None) is None for task in artifacts.tasks)
+    assert "Return only valid JSON" in artifacts.tasks[-1].expected_output
+    assert artifacts.tasks[-1].context == artifacts.tasks[:4]
     assert artifacts.crew.inputs is not None
     assert artifacts.crew.inputs["request"]["request_id"] == request.request_id
 
