@@ -15,20 +15,24 @@ echo "MinIO is ready!"
 echo "Configuring MinIO client..."
 mc alias set myminio http://minio:9000 admin password
 
-# Create the lakehouse bucket
-echo "Creating lakehouse bucket..."
-mc mb myminio/lakehouse --ignore-existing
+# Create lakehouse buckets
+echo "Creating lakehouse buckets..."
+mc mb myminio/bronze --ignore-existing
+mc mb myminio/silver --ignore-existing
+mc mb myminio/ml --ignore-existing
 
-# Set bucket to public for read/write access
+# Set buckets to public for read/write access in this local stack
 echo "Setting bucket permissions to public..."
-mc anonymous set public myminio/lakehouse
+mc anonymous set public myminio/bronze
+mc anonymous set public myminio/silver
+mc anonymous set public myminio/ml
 
 # Verify bucket creation and permissions
 echo "Verifying bucket setup..."
 mc ls myminio/
 
 echo "MinIO initialization complete!"
-echo "Bucket 'lakehouse' has been created at s3a://lakehouse/"
+echo "Buckets have been created at s3a://bronze/, s3a://silver/, and s3a://ml/"
 echo "Bucket permissions set to public for read/write access"
 
 # Keep container running to ensure initialization completes
