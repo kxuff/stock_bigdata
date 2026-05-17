@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 
 import pandas as pd
 from pyspark.sql import SparkSession
@@ -10,7 +11,7 @@ from ml_features import PRICE_FEATURE_COLUMNS, compute_price_features
 
 
 CATALOG = os.getenv("ICEBERG_CATALOG", "nessie")
-CHECKPOINT_BASE = os.getenv("ML_CHECKPOINT_BASE", "s3a://ml/checkpoints/silver_to_ml_features")
+CHECKPOINT_BASE = os.getenv("ML_CHECKPOINT_BASE", "s3a://prediction/checkpoints/silver_to_ml_features")
 FEATURE_VERSION = os.getenv("ML_FEATURE_VERSION", "price_v1_notebook_ac")
 SILVER_MARKET_TABLE = f"{CATALOG}.silver.stock_market"
 ML_FEATURE_TABLE = f"{CATALOG}.ml.stock_price_features"
@@ -20,6 +21,9 @@ def build_spark() -> SparkSession:
     return (
         SparkSession.builder.appName("SilverToMLPriceFeatures")
         .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.executor.memory", "3500m")
+        .config("spark.executor.cores", "2")
+        .config("spark.cores.max", "2")
         .getOrCreate()
     )
 
@@ -40,7 +44,7 @@ def ensure_tables(spark: SparkSession) -> None:
         )
         USING iceberg
         PARTITIONED BY (days(Datetime), Symbol)
-        LOCATION 's3a://ml/stock_price_features'
+        LOCATION 's3a://prediction/stock_price_features'
         """
     )
     spark.sql(
@@ -58,7 +62,7 @@ def ensure_tables(spark: SparkSession) -> None:
         )
         USING iceberg
         PARTITIONED BY (days(Datetime), Symbol)
-        LOCATION 's3a://ml/stock_predictions'
+        LOCATION 's3a://prediction/stock_predictions'
         """
     )
 
@@ -103,7 +107,8 @@ def write_features_for_batch(batch_df, batch_id: int) -> None:
 
     keys_pdf = batch_keys.toPandas()
     keys_pdf = keys_pdf[keys_pdf["Symbol"] != "SPY"]
-    keys_pdf["Datetime"] = pd.to_datetime(keys_pdf["Datetime"])
+    keys_pdf["Datetime"] = pd.to_datetime(keys_pdf["Datetime"], utc=True).dt.tz_localize(None).dt.floor("D")
+    keys_pdf = keys_pdf.drop_duplicates()
     features_pdf["Datetime"] = pd.to_datetime(features_pdf["Datetime"])
     output_pdf = features_pdf.merge(keys_pdf, on=["Datetime", "Symbol"], how="inner")
     if output_pdf.empty:
@@ -148,7 +153,41 @@ def start_stream(spark: SparkSession):
 
 
 if __name__ == "__main__":
-    spark_session = build_spark()
-    ensure_tables(spark_session)
-    start_stream(spark_session)
-    spark_session.streams.awaitAnyTermination()
+    spark = None
+    queries = []
+    stop_requested = False
+
+    def request_shutdown(_signum=None, _frame=None):
+        global stop_requested
+        print("Shutdown requested...")
+        stop_requested = True
+
+    def shutdown():
+        print("Stopping streaming queries...")
+        for query in queries:
+            try:
+                query.stop()
+            except Exception as e:
+                print(f"Unable to stop query cleanly: {e}")
+        if spark is not None:
+            try:
+                spark.stop()
+            except Exception as e:
+                print(f"Unable to stop Spark cleanly: {e}")
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+
+    try:
+        spark = build_spark()
+        ensure_tables(spark)
+        queries.append(start_stream(spark))
+        while not stop_requested:
+            if spark.streams.awaitAnyTermination(5):
+                break
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"Error: {str(e)}")
+    finally:
+        shutdown()

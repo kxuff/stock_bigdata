@@ -1,3 +1,5 @@
+import signal
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp, explode, from_json, from_unixtime, to_timestamp, when
 from pyspark.sql.types import (
@@ -48,6 +50,9 @@ def build_spark() -> SparkSession:
     return (
         SparkSession.builder.appName("KafkaToBronzeIceberg")
         .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.executor.memory", "1g")
+        .config("spark.executor.cores", "1")
+        .config("spark.cores.max", "1")
         .getOrCreate()
     )
 
@@ -195,19 +200,53 @@ def write_iceberg_stream(df, table_name: str, checkpoint: str):
 
 
 if __name__ == "__main__":
-    spark = build_spark()
-    ensure_tables(spark)
+    spark = None
+    queries = []
+    stop_requested = False
 
-    queries = [
-        write_iceberg_stream(
-            market_stream(spark),
-            f"{CATALOG}.bronze.stock_market",
-            f"{CHECKPOINT_BASE}/stock_market",
-        ),
-        write_iceberg_stream(
-            news_stream(spark),
-            f"{CATALOG}.bronze.stock_news",
-            f"{CHECKPOINT_BASE}/stock_news",
-        ),
-    ]
-    spark.streams.awaitAnyTermination()
+    def request_shutdown(_signum=None, _frame=None):
+        global stop_requested
+        print("Shutdown requested...")
+        stop_requested = True
+
+    def shutdown():
+        print("Stopping streaming queries...")
+        for query in queries:
+            try:
+                query.stop()
+            except Exception as e:
+                print(f"Unable to stop query cleanly: {e}")
+        if spark is not None:
+            try:
+                spark.stop()
+            except Exception as e:
+                print(f"Unable to stop Spark cleanly: {e}")
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
+
+    try:
+        spark = build_spark()
+        ensure_tables(spark)
+
+        queries.extend([
+            write_iceberg_stream(
+                market_stream(spark),
+                f"{CATALOG}.bronze.stock_market",
+                f"{CHECKPOINT_BASE}/stock_market",
+            ),
+            write_iceberg_stream(
+                news_stream(spark),
+                f"{CATALOG}.bronze.stock_news",
+                f"{CHECKPOINT_BASE}/stock_news",
+            ),
+        ])
+        while not stop_requested:
+            if spark.streams.awaitAnyTermination(5):
+                break
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"Error: {str(e)}")
+    finally:
+        shutdown()

@@ -168,15 +168,11 @@ def compute_price_features(
     if price_history.empty:
         return pd.DataFrame(columns=["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS])
 
-    spy_close = spy_history["Close"] if isinstance(spy_history, pd.DataFrame) else spy_history
-    spy_close = spy_close.copy()
-    spy_close.index = pd.to_datetime(spy_close.index)
+    spy_close = _daily_spy_close(spy_history)
     outputs = []
 
     for symbol, group in price_history.groupby("Symbol", sort=False):
-        group = group.sort_values("Datetime").drop_duplicates(["Datetime"], keep="last").copy()
-        group["Datetime"] = pd.to_datetime(group["Datetime"])
-        group = group.set_index("Datetime")
+        group = _daily_ohlcv(group)
 
         close = pd.to_numeric(group["Close"], errors="coerce")
         high = pd.to_numeric(group["High"], errors="coerce")
@@ -194,6 +190,45 @@ def compute_price_features(
     if drop_incomplete:
         result = result.dropna(subset=PRICE_FEATURE_COLUMNS)
     return result[["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS]]
+
+
+def _daily_ohlcv(group: pd.DataFrame) -> pd.DataFrame:
+    """Collapse intraday market rows to one trading-day OHLCV bar."""
+    group = group.sort_values("Datetime").drop_duplicates(["Datetime"], keep="last").copy()
+    group["Datetime"] = pd.to_datetime(group["Datetime"], utc=True, errors="coerce").dt.tz_localize(None)
+    group = group.dropna(subset=["Datetime"]).set_index("Datetime")
+    symbol = group["Symbol"].iloc[-1] if "Symbol" in group.columns and not group.empty else None
+    daily = (
+        group.resample("1D")
+        .agg(
+            Open=("Open", "first"),
+            High=("High", "max"),
+            Low=("Low", "min"),
+            Close=("Close", "last"),
+            Volume=("Volume", "sum"),
+        )
+        .dropna(subset=["Open", "High", "Low", "Close"])
+    )
+    if symbol is not None:
+        daily["Symbol"] = symbol
+    return daily
+
+
+def _daily_spy_close(spy_history: pd.DataFrame | pd.Series) -> pd.Series:
+    """Return SPY daily close from either daily or intraday input."""
+    if isinstance(spy_history, pd.DataFrame):
+        if "Datetime" in spy_history.columns:
+            spy = spy_history.copy()
+            spy["Datetime"] = pd.to_datetime(spy["Datetime"], utc=True, errors="coerce").dt.tz_localize(None)
+            spy = spy.dropna(subset=["Datetime"]).sort_values("Datetime").set_index("Datetime")
+            close = pd.to_numeric(spy["Close"], errors="coerce")
+        else:
+            close = pd.to_numeric(spy_history["Close"], errors="coerce")
+            close.index = pd.to_datetime(close.index, utc=True, errors="coerce").tz_localize(None)
+    else:
+        close = pd.to_numeric(spy_history.copy(), errors="coerce")
+        close.index = pd.to_datetime(close.index, utc=True, errors="coerce").tz_localize(None)
+    return close.resample("1D").last().dropna()
 
 
 def _build_one_symbol_features(

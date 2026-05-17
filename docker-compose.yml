@@ -243,6 +243,7 @@ services:
       - SPARK_MASTER_HOST=spark-master
       - SPARK_MASTER_PORT=7077
       - SPARK_MASTER_WEBUI_PORT=8080
+      - PATH=/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     volumes:
       - ./data:/opt/spark/data
       - ./spark_jobs:/opt/spark-apps
@@ -259,10 +260,11 @@ services:
     container_name: spark-worker
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
-      - SPARK_WORKER_MEMORY=4G
-      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=8G
+      - SPARK_WORKER_CORES=4
       - SPARK_WORKER_PORT=7078
       - SPARK_WORKER_WEBUI_PORT=8084
+      - PATH=/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     volumes:
       - ./data:/opt/spark/data
       - ./spark_jobs:/opt/spark-apps
