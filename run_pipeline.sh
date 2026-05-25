@@ -98,6 +98,18 @@ docker-compose exec -T spark-master spark-submit \
 SILVER_ML_PID=$!
 PIDS="$PIDS $SILVER_ML_PID"
 
+# Step 6: Run silver_to_alerts
+log_info "Step 6: Starting silver_to_alerts job..."
+docker-compose exec -T spark-master spark-submit \
+  --master spark://spark-master:7077 \
+  --conf spark.executor.memory=2g \
+  --conf spark.executor.cores=1 \
+  --conf spark.cores.max=1 \
+  //opt/spark-apps/silver_to_alerts.py &
+
+SILVER_ALERTS_PID=$!
+PIDS="$PIDS $SILVER_ALERTS_PID"
+
 log_info "All jobs started! Waiting for completion..."
 log_warn "Press Ctrl+C to stop all jobs"
 

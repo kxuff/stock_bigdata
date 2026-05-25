@@ -93,7 +93,8 @@ def market_silver_stream(spark: SparkSession):
         .where(col("Datetime").isNotNull())
         .where(col("Symbol").isNotNull() & (length(col("Symbol")) > 0))
         .where(col("Close").isNotNull() & (col("Close") > 0))
-        .where(col("High").isNull() | col("Low").isNull() | (col("High") >= col("Low")))
+        .where(col("High").isNotNull() & col("Low").isNotNull() & (col("High") >= col("Low")))
+        .where(col("Volume").isNotNull() & (col("Volume") > 0))
     )
     return clean.select(
         "Datetime",
@@ -156,6 +157,7 @@ def write_iceberg_stream(df, table_name: str, checkpoint: str):
 
     return (
         df.writeStream.foreachBatch(append_batch)
+        .trigger(processingTime="2 minute")
         .option("checkpointLocation", checkpoint)
         .outputMode("append")
         .start()

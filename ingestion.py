@@ -36,6 +36,7 @@ SYMBOLS = [
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
+    key_serializer=lambda key: key.encode("utf-8"),
     value_serializer=lambda value: json.dumps(value, default=str).encode("utf-8"),
 )
 
@@ -68,7 +69,7 @@ def fetch_market_data(symbol: str) -> dict | None:
             logger.debug(f"No market data available for {symbol}")
             return None
 
-        latest = data.iloc[-1:]
+        latest = data.iloc[-2:0-1]  # Get the most recent complete minute data (exclude the last row which may be incomplete)
         if latest.empty:
             return None
 
@@ -76,6 +77,20 @@ def fetch_market_data(symbol: str) -> dict | None:
         latest["Datetime"] = latest["Datetime"].astype(str)
         latest["Symbol"] = symbol
         return latest.to_dict(orient="records")[0]
+
+        # data = data.reset_index()
+
+        # Normalize datetime
+        # data["Datetime"] = data["Datetime"].astype(str)
+
+        # Add symbol column
+        # data["Symbol"] = symbol
+
+        # Convert dataframe -> list[dict]
+        # records = data.to_dict(orient="records")
+
+        # return records
+
     except Exception as e:
         logger.error(f"Error fetching market data for {symbol}: {e}")
         return None
@@ -114,12 +129,20 @@ def produce_market_data() -> None:
     for symbol in SYMBOLS:
         try:
             record = fetch_market_data(symbol)
+
             if not record:
                 logger.debug(f"No market data for {symbol}")
                 continue
+            producer.send(
+                MARKET_TOPIC,
+                key=record.get("Symbol"),
+                value=record
+            )
 
-            producer.send(MARKET_TOPIC, value=record)
-            logger.info(f"Sent market data: {symbol} | Close={record.get('Close')}")
+            logger.info(
+                f"Sent market record for {symbol}"
+            )
+
         except Exception as exc:
             logger.error(f"Failed market data for {symbol}: {exc}")
 
@@ -133,7 +156,7 @@ def produce_news() -> None:
         try:
             records = fetch_news(symbol, from_date, to_date)
             for record in records:
-                producer.send(NEWS_TOPIC, value=record)
+                producer.send(NEWS_TOPIC,key = record.get("Symbol"), value=record)
             logger.info(f"Sent {len(records)} news records for {symbol}")
         except Exception as exc:
             logger.error(f"Failed news for {symbol}: {exc}")
@@ -148,7 +171,7 @@ def cleanup():
             logger.error(f"Error during cleanup: {str(e)}")
 
 def run_ingestion() -> None:
-    interval_seconds_stock = int(os.getenv("INGESTION_INTERVAL_SECONDS", "120"))  
+    interval_seconds_stock = int(os.getenv("INGESTION_INTERVAL_SECONDS", "60"))  
     interval_seconds_news = int(os.getenv("NEWS_INGESTION_INTERVAL_SECONDS", "300"))  
     stock_last_run = datetime.min.replace(tzinfo=timezone.utc)
     news_last_run = datetime.min.replace(tzinfo=timezone.utc)
