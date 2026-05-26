@@ -82,6 +82,7 @@ def ensure_tables(spark: SparkSession) -> None:
         USING iceberg
         PARTITIONED BY (days(event_time), symbol)
         LOCATION '{ALERT_LOCATION}'
+        TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
 

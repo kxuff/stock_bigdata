@@ -79,6 +79,7 @@ def ensure_tables(spark: SparkSession) -> None:
         USING iceberg
         PARTITIONED BY (days(Datetime))
         LOCATION 's3a://bronze/stock_market'
+        TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
     spark.sql(
@@ -103,6 +104,7 @@ def ensure_tables(spark: SparkSession) -> None:
         USING iceberg
         PARTITIONED BY (days(Datetime))
         LOCATION 's3a://bronze/stock_news'
+        TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
 

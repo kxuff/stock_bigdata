@@ -20,19 +20,21 @@ echo "Creating lakehouse buckets..."
 mc mb myminio/bronze --ignore-existing
 mc mb myminio/silver --ignore-existing
 mc mb myminio/prediction --ignore-existing
+mc mb myminio/alert --ignore-existing
 
 # Set buckets to public for read/write access in this local stack
 echo "Setting bucket permissions to public..."
 mc anonymous set public myminio/bronze
 mc anonymous set public myminio/silver
 mc anonymous set public myminio/prediction
+mc anonymous set public myminio/alert
 
 # Verify bucket creation and permissions
 echo "Verifying bucket setup..."
 mc ls myminio/
 
 echo "MinIO initialization complete!"
-echo "Buckets have been created at s3a://bronze/, s3a://silver/, and s3a://prediction/"
+echo "Buckets have been created at s3a://bronze/, s3a://silver/, s3a://prediction/, and s3a://alert/"
 echo "Bucket permissions set to public for read/write access"
 
 # Keep container running to ensure initialization completes
