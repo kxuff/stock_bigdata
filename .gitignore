@@ -3,6 +3,6 @@ venv/
 __pycache__/
 ivy2/
 
-data/
+data/eod_batch
 
 airflow/logs
