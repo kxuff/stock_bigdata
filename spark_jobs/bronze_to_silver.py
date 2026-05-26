@@ -153,10 +153,15 @@ def news_silver_stream(spark: SparkSession):
     )
 
 
-def write_iceberg_stream(df, table_name: str, checkpoint: str):
+def write_iceberg_stream(df, table_name: str, checkpoint: str, jdbc_options: dict | None = None):
     def append_batch(batch_df, _batch_id):
         batch_df.writeTo(table_name).append()
-
+        
+        if jdbc_options:
+            batch_df.write.format("jdbc") \
+                .options(**jdbc_options) \
+                .mode("append") \
+                .save()
     return (
         df.writeStream.foreachBatch(append_batch)
         .trigger(processingTime="2 minute")
@@ -192,6 +197,14 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
     
+    POSTGRES_OPTIONS = {
+        "url": "jdbc:postgresql://postgres:5432/stock_db", 
+        "driver": "org.postgresql.Driver",
+        "dbtable": "stock_market", 
+        "user": "postgres",
+        "password": "postgres"
+    }
+    
     try: 
         spark = build_spark()
         ensure_tables(spark)
@@ -201,6 +214,7 @@ if __name__ == "__main__":
                 market_silver_stream(spark),
                 f"{CATALOG}.silver.stock_market",
                 f"{CHECKPOINT_BASE}/stock_market",
+                POSTGRES_OPTIONS
             ),
             write_iceberg_stream(
                 news_silver_stream(spark),
