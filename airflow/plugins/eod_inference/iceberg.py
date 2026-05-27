@@ -54,7 +54,8 @@ def build_spark() -> SparkSession:
             "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.2,"
             "org.projectnessie.nessie-integrations:nessie-spark-extensions-3.5_2.12:0.77.1,"
             "org.apache.hadoop:hadoop-aws:3.3.4,"
-            "com.amazonaws:aws-java-sdk-bundle:1.12.262"
+            "com.amazonaws:aws-java-sdk-bundle:1.12.262,"
+            "org.postgresql:postgresql:42.6.0"
         )
         
         # 4. Extensions & Catalog Default Settings
@@ -213,6 +214,13 @@ def max_dates_by_symbol(spark: SparkSession, table_name: str) -> dict[str, date]
         if row.Symbol and row.max_datetime is not None
     }
 
+POSTGRES_OPTIONS = {
+        "url": "jdbc:postgresql://postgres:5432/stock_db", 
+        "driver": "org.postgresql.Driver",
+        "dbtable": "stock_inference", 
+        "user": "postgres",
+        "password": "postgres"
+    }
 
 def merge_pandas_to_iceberg(
     spark: SparkSession,
@@ -224,8 +232,16 @@ def merge_pandas_to_iceberg(
     if updates.empty:
         return
     staging_path = write_pandas_parquet(updates, table_name)
+    config = PipelineConfig.from_env()
     try:
         df = spark.read.parquet(staging_path)
+        
+        if table_name == config.ml_ready_prediction_table:
+            df.write.format("jdbc") \
+                .options(**POSTGRES_OPTIONS) \
+                .mode("append") \
+                .save()
+                
         if "feature_vector" in spark_table(spark, table_name).columns and "feature_vector" not in df.columns:
             df = df.withColumn("feature_vector", array(*[col(name).cast("double") for name in PRICE_FEATURE_COLUMNS]))
         merge_spark_to_iceberg(df, table_name, keys=keys)

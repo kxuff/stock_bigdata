@@ -58,10 +58,16 @@ def _load_model_artifact(path: Path | None, *, required: bool) -> dict[str, Any]
         if required:
             raise FileNotFoundError("Required model path is not configured.")
         return None
-    if not path.exists():
+    
+    clean_path = Path(str(path).strip())
+
+    if not clean_path.exists():
         if required:
-            raise FileNotFoundError(f"Required model artifact does not exist: {path}")
+            # Dùng repr() để in ra chính xác chuỗi (hiện rõ \r nếu có)
+            raise FileNotFoundError(f"Required model artifact does not exist: {repr(str(clean_path))}")
         return None
+    
+    path = clean_path
 
     try:
         import joblib

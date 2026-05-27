@@ -121,14 +121,15 @@ with DAG(
         python_callable=_features,
     )
 
-    # inference = PythonOperator(
-    #     task_id="run_ml_inference",
-    #     python_callable=_inference,
-    # )
+    inference = PythonOperator(
+        task_id="run_ml_inference",
+        python_callable=_inference,
+    )
 
-    # save = PythonOperator(
-    #     task_id="save_predictions",
-    #     python_callable=_save,
-    # )
+    save = PythonOperator(
+        task_id="save_predictions",
+        python_callable=_save,
+    )
 
-    extract >> clean >> features 
+    extract >> clean >> features >> inference >> save
+

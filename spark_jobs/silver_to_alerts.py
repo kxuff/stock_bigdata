@@ -484,6 +484,16 @@ def write_alerts_for_batch(batch_df, batch_id: int) -> None:
 
     alerts_df = spark.createDataFrame(alerts, schema=ALERT_SCHEMA).withColumn("process_date", current_timestamp())
     alerts_df.writeTo(ALERT_TABLE).append()
+    
+    POSTGRES_OPTIONS = {
+        "url": "jdbc:postgresql://postgres:5432/stock_db", 
+        "driver": "org.postgresql.Driver",
+        "dbtable": "stock_market", 
+        "user": "postgres",
+        "password": "postgres"
+    }
+    
+    alerts_df.write.format("jdbc").options(**POSTGRES_OPTIONS).mode("append").save()
 
 
 def start_stream(spark: SparkSession):
@@ -500,7 +510,7 @@ if __name__ == "__main__":
     spark = None
     queries = []
     stop_requested = False
-
+    
     def request_shutdown(_signum=None, _frame=None):
         global stop_requested
         print("Shutdown requested...")

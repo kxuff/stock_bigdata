@@ -43,17 +43,16 @@ def extract_eod_prices(as_of_date: str) -> dict[str, Any]:
     download_requests: list[tuple[str, date, date]] = []
     for symbol in needed_symbols:
         if config.initial_load:
-            start = target_date - timedelta(days=config.backfill_calendar_days)
+            # start = target_date - timedelta(days=config.backfill_calendar_days)
+            start = date(2025, 1, 1)
+            end = date(2026, 5, 26)
             mode_by_symbol[symbol] = "backfill"
+            download_requests.append((symbol, start, end))
         else:
             last_date = max_dates.get(symbol)
             start = last_date + timedelta(days=1) if last_date is not None else target_date
             mode_by_symbol[symbol] = "incremental"
-
-        if start > target_date:
-            continue
-
-        download_requests.append((symbol, start, target_date + timedelta(days=1)))
+            download_requests.append((symbol, start, target_date + timedelta(days=1)))
 
     downloads = _download_symbols(download_requests)
     new_rows = pd.concat(downloads, ignore_index=True) if downloads else pd.DataFrame(columns=_price_columns())

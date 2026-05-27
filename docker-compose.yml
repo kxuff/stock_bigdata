@@ -310,6 +310,25 @@ services:
       - default
     restart: "no"
 
+  postgres-nessie:
+    image: postgres:14
+    container_name: postgres-nessie
+    environment:
+      POSTGRES_DB: nessie
+      POSTGRES_USER: nessie
+      POSTGRES_PASSWORD: nessie
+    ports:
+      - "5434:5432" # Dùng port 5434 để không trùng với Postgres chính (5432) và Airflow (5433)
+    volumes:
+      - postgres_nessie_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "nessie"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    networks:
+      - default
+
   # Nessie Catalog Server
   nessie:
     image: ghcr.io/projectnessie/nessie:0.77.1
@@ -318,19 +337,22 @@ services:
       - "19120:19120"
     environment:
       QUARKUS_PROFILE: prod
-      NESSIE_VERSION_STORE_TYPE: ROCKSDB
-      NESSIE_VERSION_STORE_PERSIST_ROCKSDB_DATABASE_PATH: /nessie/data
-      # S3 configuration for MinIO
+      # --- CHUYỂN TỪ ROCKSDB SANG JDBC (POSTGRES) ---
+      NESSIE_VERSION_STORE_TYPE: JDBC
+      QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres-nessie:5432/nessie
+      QUARKUS_DATASOURCE_USERNAME: nessie
+      QUARKUS_DATASOURCE_PASSWORD: nessie
+      # --- S3 configuration for MinIO ---
       QUARKUS_S3_ENDPOINT_OVERRIDE: http://minio:9000
       QUARKUS_S3_PATH_STYLE_ACCESS: "true"
       QUARKUS_S3_AWS_REGION: us-east-1
       QUARKUS_S3_AWS_CREDENTIALS_TYPE: static
       QUARKUS_S3_AWS_CREDENTIALS_STATIC_PROVIDER_ACCESS_KEY_ID: admin
       QUARKUS_S3_AWS_CREDENTIALS_STATIC_PROVIDER_SECRET_ACCESS_KEY: password
-    volumes:
-      - nessie_data:/nessie/data
+    # XÓA block volumes mapping vào /nessie/data vì không dùng RocksDB nữa
     depends_on:
       - minio-init
+      - postgres-nessie
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
       interval: 10s
@@ -346,9 +368,9 @@ volumes:
   kafka_data:
   postgres_data:
   postgres_airflow_data:
+  postgres_nessie_data:
   redis_data:
   minio_data:
-  nessie_data:
 
 networks:
   default:

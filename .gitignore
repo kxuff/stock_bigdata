@@ -6,3 +6,5 @@ ivy2/
 data/eod_batch
 
 airflow/logs
+
+test/
