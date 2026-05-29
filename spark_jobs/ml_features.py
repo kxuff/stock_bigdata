@@ -63,6 +63,8 @@ PRICE_FEATURE_COLUMNS = [
     "sector_percentile_20d",
 ]
 
+ORCA_CONTEXT_COLUMNS = ["Close", "maxdd90"]
+
 NEWS_FEATURE_COLUMNS = ["S_it", "N_it", "delta_t", "delta_S", "V", "A", "Z", "M"]
 
 
@@ -166,7 +168,7 @@ def compute_price_features(
     The returned frame keeps Datetime/Symbol identifiers plus feature columns.
     """
     if price_history.empty:
-        return pd.DataFrame(columns=["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS])
+        return pd.DataFrame(columns=["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS, *ORCA_CONTEXT_COLUMNS])
 
     spy_close = _daily_spy_close(spy_history)
     outputs = []
@@ -189,7 +191,7 @@ def compute_price_features(
     result = result.replace([np.inf, -np.inf], np.nan)
     if drop_incomplete:
         result = result.dropna(subset=PRICE_FEATURE_COLUMNS)
-    return result[["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS]]
+    return result[["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS, *ORCA_CONTEXT_COLUMNS]]
 
 
 def _daily_ohlcv(group: pd.DataFrame) -> pd.DataFrame:
@@ -239,6 +241,7 @@ def _build_one_symbol_features(
     spy_close: pd.Series,
 ) -> pd.DataFrame:
     df = pd.DataFrame(index=close.index)
+    df["Close"] = close
 
     for lb in LOOKBACKS:
         df[f"r{lb}"] = close.pct_change(lb)
@@ -278,6 +281,7 @@ def _build_one_symbol_features(
     df["downside_vol20"] = returns.where(returns < 0, 0).rolling(20).std()
     cummax = close.expanding().max().replace(0, np.nan)
     df["maxdd20"] = ((close - cummax) / cummax).rolling(20).min() * (-1)
+    df["maxdd90"] = ((close - cummax) / cummax).rolling(90).min() * (-1)
     df["realized_vol_10"] = returns.rolling(10).std()
     df["realized_vol_20"] = returns.rolling(20).std()
     df["vol_ratio_20_60"] = df["realized_vol_20"] / returns.rolling(60).std().replace(0, np.nan)
@@ -300,7 +304,7 @@ def _build_one_symbol_features(
     df["SPY_20d_return"] = spy_close.pct_change(20)
     df["sector_percentile_20d"] = 0.5
 
-    return df[PRICE_FEATURE_COLUMNS]
+    return df[[*PRICE_FEATURE_COLUMNS, *ORCA_CONTEXT_COLUMNS]]
 
 
 # def compute_news_dynamics(news_history: pd.DataFrame, symbols: Iterable[str] | None = None) -> pd.DataFrame:

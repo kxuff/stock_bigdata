@@ -78,10 +78,18 @@ def _features(**context):
         raise AirflowSkipException(str(exc)) from exc
 
 
+def _agent_context(**context):
+    _sync_airflow_variables_to_env()
+    from eod_inference.pipeline import build_agent_context
+    return build_agent_context(context["ds"])
+
+
 def _inference(**context):
     _sync_airflow_variables_to_env()
     from eod_inference.pipeline import run_ml_inference
     manifest = context["ti"].xcom_pull(task_ids="engineer_features")
+    agent_context = context["ti"].xcom_pull(task_ids="build_agent_context") or {}
+    manifest.update(agent_context)
     return run_ml_inference(manifest)
 
 
@@ -126,10 +134,14 @@ with DAG(
         python_callable=_inference,
     )
 
+    agent_context = PythonOperator(
+        task_id="build_agent_context",
+        python_callable=_agent_context,
+    )
+
     save = PythonOperator(
         task_id="save_predictions",
         python_callable=_save,
     )
 
-    extract >> clean >> features >> inference >> save
-
+    extract >> clean >> features >> agent_context >> inference >> save
