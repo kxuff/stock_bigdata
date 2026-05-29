@@ -66,10 +66,13 @@ def build_tool_result_bundle(
     for symbol in request.symbols:
         row = rows_by_symbol.get(symbol, {})
         close = _float(row, "Close", "close", "latest_price", default=1.0)
-        pred_a = _float(row, "pred_a", "prediction", "final_score", default=0.0)
-        risk_prob = _float(row, "risk_prob", "probability_down", default=0.5)
-        final_score = _float(row, "final_score", default=pred_a * (1 - risk_prob))
-        probability_up = _probability_from_score(final_score, risk_prob)
+        pred_a = _optional_float(row, "pred_a", "prediction")
+        final_score = _optional_float(row, "final_score")
+        risk_prob_input = _optional_float(row, "risk_prob", "probability_down")
+        risk_prob_missing = risk_prob_input is None
+        risk_prob = risk_prob_input if risk_prob_input is not None else 0.5
+        trend_score = final_score if final_score is not None else (pred_a if pred_a is not None else 0.0)
+        probability_up = _probability_from_model_outputs(pred_a, final_score)
         probability_down = max(0.0, min(1.0, 1.0 - probability_up))
         risk_label = _risk_label(risk_prob)
         row_source_ref = str(row.get("source_ref") or f"{source_ref}:{symbol}")
@@ -81,7 +84,7 @@ def build_tool_result_bundle(
             "latest_price": max(close, 0.01),
             "price_change_pct_1d": _float(row, "r1", "price_change_pct_1d", default=0.0) * 100,
             "volume_ratio_20d": max(_float(row, "RVOL20", "volume_ratio_20d", default=1.0), 0.0),
-            "trend_direction": "UP" if final_score > 0 else "DOWN" if final_score < 0 else "FLAT",
+            "trend_direction": "UP" if trend_score > 0 else "DOWN" if trend_score < 0 else "FLAT",
             "technical_indicators": {
                 "rsi_14": _nullable_float(row, "RSI14", "rsi_14"),
                 "macd_signal": "BULLISH" if _float(row, "MACD_hist", default=0.0) >= 0 else "BEARISH",
@@ -101,11 +104,13 @@ def build_tool_result_bundle(
             "volatility_30d": max(_float(row, "vol20", "volatility_30d", default=risk_prob), 0.0),
             "max_drawdown_90d": max_drawdown_90d,
             "beta": _nullable_float(row, "beta_60D", "beta"),
-            "risk_factors": [f"upstream risk_prob={risk_prob:.3f}", f"drawdown_window={risk_window}"],
+            "risk_factors": _risk_factors(risk_prob, risk_window, risk_prob_missing),
             "confidence_cap": max(0.25, min(0.9, 1.0 - risk_prob / 2)),
         }
         if _has_any(row, "sentiment_score", "sentiment_label", "article_count", "top_drivers"):
-            sentiment_source_refs.extend(_list_value(_first(row, "sentiment_source_ref", "source_refs_x")))
+            sentiment_source_refs.extend(
+                _list_value(_first(row, "sentiment_source_refs", "sentiment_source_ref", "source_refs_x", "source_refs"))
+            )
             score = max(-1.0, min(1.0, _float(row, "sentiment_score", default=0.0)))
             sentiment_data[symbol] = {
                 "sentiment_label": str(_first(row, "sentiment_label") or _sentiment_label(score)),
@@ -122,7 +127,9 @@ def build_tool_result_bundle(
             }
 
         if _has_any(row, "valuation_label", "pe_ratio", "sector_pe_ratio", "fair_value_estimate", "upside_downside_pct"):
-            valuation_source_refs.extend(_list_value(_first(row, "valuation_source_ref", "source_refs_y")))
+            valuation_source_refs.extend(
+                _list_value(_first(row, "valuation_source_refs", "valuation_source_ref", "source_refs_y", "source_refs"))
+            )
             valuation_data[symbol] = {
                 "valuation_label": str(_first(row, "valuation_label") or "UNKNOWN"),
                 "pe_ratio": _nullable_float(row, "pe_ratio"),
@@ -136,7 +143,7 @@ def build_tool_result_bundle(
                 "pe_ratio": None,
                 "sector_pe_ratio": None,
                 "fair_value_estimate": None,
-                "upside_downside_pct": final_score * 100,
+                "upside_downside_pct": trend_score * 100,
             }
 
     base = {
@@ -204,6 +211,14 @@ def _float(row: dict[str, Any], *keys: str, default: float) -> float:
         return default
 
 
+def _optional_float(row: dict[str, Any], *keys: str) -> float | None:
+    value = _first(row, *keys)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _nullable_float(row: dict[str, Any], *keys: str) -> float | None:
     value = _first(row, *keys)
     try:
@@ -268,11 +283,21 @@ def _unique(values: list[str]) -> list[str]:
     return output
 
 
-def _probability_from_score(final_score: float, risk_prob: float) -> float:
-    if 0 <= final_score <= 1:
-        return max(0.0, min(1.0, final_score))
-    base = 0.5 + max(-0.49, min(0.49, final_score))
-    return max(0.0, min(1.0, base * (1 - risk_prob / 2)))
+def _probability_from_model_outputs(pred_a: float | None, final_score: float | None) -> float:
+    """Return raw model probability when available; final_score is risk-adjusted trend score."""
+    if pred_a is not None and 0 <= pred_a <= 1:
+        return pred_a
+    if final_score is not None and 0 <= final_score <= 1:
+        return final_score
+    score = final_score if final_score is not None else 0.0
+    return max(0.0, min(1.0, 0.5 + max(-0.49, min(0.49, score))))
+
+
+def _risk_factors(risk_prob: float, risk_window: str, risk_prob_missing: bool) -> list[str]:
+    factors = [f"upstream risk_prob={risk_prob:.3f}", f"drawdown_window={risk_window}"]
+    if risk_prob_missing:
+        factors.append("risk_prob unavailable; using neutral fallback")
+    return factors
 
 
 def _risk_label(risk_prob: float) -> str:
