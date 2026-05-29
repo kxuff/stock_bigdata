@@ -93,6 +93,7 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
                 "headline": title or text[:180],
                 "score": score,
                 "url": item.get("link") or item.get("url"),
+                "published_at": published,
             }
             if finbert:
                 candidate["finbert_label"] = finbert.get("label")
@@ -108,6 +109,13 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
             continue
         article_count = len(scored)
         sentiment_score = float(sum(item["score"] for item in scored) / article_count)
+        published_values = [item["published_at"].tz_localize(None) for item in scored if item.get("published_at") is not None]
+        stale_article_count = sum(
+            1
+            for item in scored
+            if item.get("published_at") is not None and item["published_at"].tz_localize(None) < min_dt
+        )
+        scored_at = pd.Timestamp.utcnow().tz_localize(None)
         rows.append(
             {
                 "as_of_date": target_date.isoformat(),
@@ -115,9 +123,13 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
                 "sentiment_score": max(-1.0, min(1.0, sentiment_score)),
                 "sentiment_label": _sentiment_label(sentiment_score, scored),
                 "article_count": article_count,
+                "latest_article_published_at": max(published_values) if published_values else pd.NaT,
+                "oldest_article_published_at": min(published_values) if published_values else pd.NaT,
+                "sentiment_scored_at": scored_at,
+                "stale_article_count": stale_article_count,
                 "top_drivers": [item["headline"] for item in sorted(scored, key=lambda row: abs(row["score"]), reverse=True)[:3]],
                 "source_refs": _sentiment_source_refs(symbol, finbert_used=finbert_used),
-                "process_date": pd.Timestamp.utcnow().tz_localize(None),
+                "process_date": scored_at,
             }
         )
     return pd.DataFrame(rows)
@@ -143,6 +155,7 @@ def _build_valuation(symbols: list[str], target_date) -> pd.DataFrame:
                 "current_price": current_price,
                 "pe_ratio": pe_ratio,
                 "target_mean_price": target_mean_price,
+                "analyst_count": _num(info.get("numberOfAnalystOpinions")),
                 "source_refs": [f"yfinance.fundamentals:{symbol}"],
             }
         )
@@ -153,7 +166,12 @@ def _build_valuation(symbols: list[str], target_date) -> pd.DataFrame:
     sector_medians = raw.dropna(subset=["pe_ratio"]).groupby("sector")["pe_ratio"].median().to_dict()
     output_rows: list[dict[str, Any]] = []
     for row in raw.to_dict(orient="records"):
-        sector_pe = sector_medians.get(row["sector"]) or SECTOR_PE_FALLBACK.get(row["sector"])
+        sector_sample_count = int(raw[(raw["sector"] == row["sector"]) & raw["pe_ratio"].notna()].shape[0])
+        sector_pe = sector_medians.get(row["sector"])
+        valuation_method = "analyst_target" if row["target_mean_price"] else "sector_pe_relative"
+        if not sector_pe:
+            sector_pe = SECTOR_PE_FALLBACK.get(row["sector"])
+            valuation_method = "fallback_sector_pe"
         pe_ratio = row["pe_ratio"]
         current_price = row["current_price"]
         fair_value = row["target_mean_price"]
@@ -171,6 +189,18 @@ def _build_valuation(symbols: list[str], target_date) -> pd.DataFrame:
                 "sector_pe_ratio": sector_pe,
                 "fair_value_estimate": fair_value,
                 "upside_downside_pct": upside,
+                "valuation_method": valuation_method if fair_value is not None else "unavailable",
+                "valuation_quality": _valuation_quality(
+                    valuation_method=valuation_method,
+                    fair_value=fair_value,
+                    pe_ratio=pe_ratio,
+                    sector_sample_count=sector_sample_count,
+                    analyst_count=row.get("analyst_count"),
+                ),
+                "valuation_fetched_at": pd.Timestamp.utcnow().tz_localize(None),
+                "fundamentals_as_of": target_date.isoformat(),
+                "sector_sample_count": sector_sample_count,
+                "analyst_count": row.get("analyst_count"),
                 "source_refs": row["source_refs"],
                 "process_date": pd.Timestamp.utcnow().tz_localize(None),
             }
@@ -280,6 +310,23 @@ def _valuation_label(upside: float | None) -> str:
     if upside <= -10:
         return "OVERVALUED"
     return "FAIRLY_VALUED"
+
+
+def _valuation_quality(
+    *,
+    valuation_method: str,
+    fair_value: float | None,
+    pe_ratio: float | None,
+    sector_sample_count: int,
+    analyst_count: float | None,
+) -> str:
+    if fair_value is None:
+        return "UNKNOWN"
+    if valuation_method == "analyst_target" and analyst_count and analyst_count >= 5:
+        return "MEDIUM"
+    if valuation_method == "sector_pe_relative" and pe_ratio and sector_sample_count >= 10:
+        return "MEDIUM"
+    return "LOW"
 
 
 def _num(value: Any) -> float | None:
