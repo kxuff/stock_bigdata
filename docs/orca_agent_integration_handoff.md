@@ -154,21 +154,81 @@ Behavior:
 - if FinBERT succeeds, `source_refs` includes `finbert:ProsusAI/finbert`
 - if FinBERT fails, lexical fallback is used and FinBERT is not cited
 
-### 3. Build agent context
+### 3. Run EOD pipeline and generate ORCA upstream context
+
+For first local run, enable initial load/backfill so the feature job has enough lookback history:
 
 ```bash
 docker compose exec -T \
   -e PYTHONPATH='/opt/airflow/plugins' \
+  -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' \
+  -e US_STOCK_SPARK_EXECUTOR_CORES='1' \
+  -e US_STOCK_SPARK_CORES_MAX='1' \
+  -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' \
+  -e US_STOCK_INITIAL_LOAD='true' \
+  -e US_STOCK_BACKFILL_CALENDAR_DAYS='500' \
   -e FINBERT_API_URL='https://parrot-sublease-preamble.ngrok-free.dev' \
   -e FINBERT_API_TIMEOUT='3' \
   -e FINBERT_FAILURE_LIMIT='3' \
-  airflow-webserver python - <<'PY'
-from eod_inference.pipeline import build_agent_context
-print(build_agent_context('2026-05-26'))
-PY
+  airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py \
+  --run-date 2026-05-29
 ```
 
-### 4. Regenerate ORCA upstream context
+Expected output includes:
+
+```json
+{
+  "orca_context_includes": [
+    "market_features",
+    "ml_predictions",
+    "risk_snapshot",
+    "sentiment_snapshot",
+    "valuation_snapshot"
+  ],
+  "orca_context_excludes": ["portfolio_snapshot"],
+  "orca_upstream_context": "/opt/airflow/data/eod_batch/staging/20260529/orca_upstream.json"
+}
+```
+
+After initial history exists, run incrementally without the initial-load flags:
+
+```bash
+docker compose exec -T \
+  -e PYTHONPATH='/opt/airflow/plugins' \
+  -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' \
+  -e US_STOCK_SPARK_EXECUTOR_CORES='1' \
+  -e US_STOCK_SPARK_CORES_MAX='1' \
+  -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' \
+  -e FINBERT_API_URL='https://parrot-sublease-preamble.ngrok-free.dev' \
+  -e FINBERT_API_TIMEOUT='3' \
+  -e FINBERT_FAILURE_LIMIT='3' \
+  airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py \
+  --run-date 2026-05-29
+```
+
+To run all default symbols, remove:
+
+```bash
+-e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA'
+```
+
+`run_ml_inference()` auto-builds sentiment and valuation context if the feature manifest does not already include them. `US_STOCK_SPARK_DRIVER_HOST` normally does not need to be set because the Spark driver host is auto-detected from the running Airflow container.
+
+### 4. Run ORCA advisory
+
+From `orca-agent-advisory`:
+
+```bash
+uv run python tools/run_upstream_advisory.py \
+  --request samples/normal_request.json \
+  --upstream /home/ming/Desktop/bigdata/stock_bigdata/data/eod_batch/staging/20260529/orca_upstream.json \
+  --source-ref 'nessie.ml_ready.stock_predictions:2026-05-29' \
+  --output-dir outputs/advisory_decisions
+```
+
+### Legacy: regenerate only ORCA upstream context
+
+If feature and agent context manifests already exist, rerun only inference:
 
 ```bash
 docker compose exec -T \
@@ -177,10 +237,8 @@ docker compose exec -T \
 import json
 from eod_inference.pipeline import run_ml_inference
 
-with open('/opt/airflow/data/eod_batch/staging/20260526/feature_manifest.json') as f:
+with open('/opt/airflow/data/eod_batch/staging/20260529/feature_manifest.json') as f:
     manifest = json.load(f)
-with open('/opt/airflow/data/eod_batch/staging/20260526/agent_context_manifest.json') as f:
-    manifest.update(json.load(f))
 
 result = run_ml_inference(manifest)
 print(json.dumps({k: result.get(k) for k in [
@@ -191,18 +249,6 @@ print(json.dumps({k: result.get(k) for k in [
     'orca_upstream_context',
 ]}, indent=2))
 PY
-```
-
-### 5. Run ORCA advisory
-
-From `orca-agent-advisory`:
-
-```bash
-uv run python tools/run_upstream_advisory.py \
-  --request samples/normal_request.json \
-  --upstream /home/ming/Desktop/bigdata/stock_bigdata/data/eod_batch/staging/20260526/orca_upstream.json \
-  --source-ref 'nessie.ml_ready.stock_predictions:2026-05-26' \
-  --output-dir outputs/advisory_decisions
 ```
 
 ## Validation commands
