@@ -60,6 +60,8 @@ def build_tool_result_bundle(
     sentiment_data: dict[str, Any] = {}
     valuation_data: dict[str, Any] = {}
     source_refs = []
+    sentiment_source_refs = []
+    valuation_source_refs = []
 
     for symbol in request.symbols:
         row = rows_by_symbol.get(symbol, {})
@@ -102,13 +104,33 @@ def build_tool_result_bundle(
             "risk_factors": [f"upstream risk_prob={risk_prob:.3f}", f"drawdown_window={risk_window}"],
             "confidence_cap": max(0.25, min(0.9, 1.0 - risk_prob / 2)),
         }
-        if include_optional_placeholders:
+        if _has_any(row, "sentiment_score", "sentiment_label", "article_count", "top_drivers"):
+            sentiment_source_refs.extend(_list_value(_first(row, "sentiment_source_ref", "source_refs_x")))
+            score = max(-1.0, min(1.0, _float(row, "sentiment_score", default=0.0)))
+            sentiment_data[symbol] = {
+                "sentiment_label": str(_first(row, "sentiment_label") or _sentiment_label(score)),
+                "sentiment_score": score,
+                "article_count": int(_float(row, "article_count", default=0.0)),
+                "top_drivers": _list_value(row.get("top_drivers")),
+            }
+        elif include_optional_placeholders:
             sentiment_data[symbol] = {
                 "sentiment_label": "NEUTRAL",
                 "sentiment_score": 0.0,
                 "article_count": 0,
                 "top_drivers": ["sentiment upstream unavailable; neutral fallback"],
             }
+
+        if _has_any(row, "valuation_label", "pe_ratio", "sector_pe_ratio", "fair_value_estimate", "upside_downside_pct"):
+            valuation_source_refs.extend(_list_value(_first(row, "valuation_source_ref", "source_refs_y")))
+            valuation_data[symbol] = {
+                "valuation_label": str(_first(row, "valuation_label") or "UNKNOWN"),
+                "pe_ratio": _nullable_float(row, "pe_ratio"),
+                "sector_pe_ratio": _nullable_float(row, "sector_pe_ratio"),
+                "fair_value_estimate": _nullable_float(row, "fair_value_estimate"),
+                "upside_downside_pct": _nullable_float(row, "upside_downside_pct"),
+            }
+        elif include_optional_placeholders:
             valuation_data[symbol] = {
                 "valuation_label": "UNKNOWN",
                 "pe_ratio": None,
@@ -124,14 +146,17 @@ def build_tool_result_bundle(
         "freshness": freshness,
         "source_refs": source_refs or [source_ref],
     }
+    sentiment_base = {**base, "source_refs": _unique(sentiment_source_refs) or base["source_refs"]}
+    valuation_base = {**base, "source_refs": _unique(valuation_source_refs) or base["source_refs"]}
     bundle = {
         "market_features": {**base, "tool": "MarketFeatureTool", "data": market_data},
         "ml_predictions": {**base, "tool": "MlPredictionTool", "data": ml_data},
         "risk_snapshot": {**base, "tool": "RiskFeatureTool", "data": risk_data},
     }
-    if include_optional_placeholders:
-        bundle["sentiment_snapshot"] = {**base, "tool": "NewsSentimentTool", "data": sentiment_data}
-        bundle["valuation_snapshot"] = {**base, "tool": "FundamentalsTool", "data": valuation_data}
+    if sentiment_data:
+        bundle["sentiment_snapshot"] = {**sentiment_base, "tool": "NewsSentimentTool", "data": sentiment_data}
+    if valuation_data:
+        bundle["valuation_snapshot"] = {**valuation_base, "tool": "FundamentalsTool", "data": valuation_data}
     return bundle
 
 
@@ -189,9 +214,58 @@ def _nullable_float(row: dict[str, Any], *keys: str) -> float | None:
 
 def _first(row: dict[str, Any], *keys: str) -> Any:
     for key in keys:
-        if key in row and row[key] is not None:
+        if key in row and row[key] is not None and not _is_nan(row[key]):
             return row[key]
     return None
+
+
+def _is_nan(value: Any) -> bool:
+    try:
+        return value != value
+    except Exception:
+        return False
+
+
+def _has_any(row: dict[str, Any], *keys: str) -> bool:
+    return any(_first(row, key) is not None for key in keys)
+
+
+def _list_value(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    return [str(item) for item in parsed if str(item).strip()]
+            except ValueError:
+                pass
+        return [stripped]
+    return [str(value)]
+
+
+def _sentiment_label(score: float) -> str:
+    if score >= 0.2:
+        return "BULLISH"
+    if score <= -0.2:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen = set()
+    output = []
+    for value in values:
+        if value not in seen:
+            output.append(value)
+            seen.add(value)
+    return output
 
 
 def _probability_from_score(final_score: float, risk_prob: float) -> float:
