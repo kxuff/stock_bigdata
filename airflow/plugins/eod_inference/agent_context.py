@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import math
+import json
+import os
 from datetime import timedelta
 from typing import Any
+from urllib import request as urlrequest
 
 import pandas as pd
 import yfinance as yf
@@ -32,6 +35,7 @@ SECTOR_PE_FALLBACK = {
     "Real Estate": 18.0,
     "Basic Materials": 16.0,
 }
+FINBERT_FAILURE_LIMIT = int(os.getenv("FINBERT_FAILURE_LIMIT", "3"))
 
 
 def build_agent_context(as_of_date: str) -> dict[str, Any]:
@@ -63,10 +67,13 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     min_dt = pd.Timestamp(target_date - timedelta(days=7))
     max_dt = pd.Timestamp(target_date + timedelta(days=1))
+    finbert_disabled = False
+    finbert_failures = 0
     for symbol in symbols:
         articles = _news_items(symbol)
         scored: list[dict[str, Any]] = []
         fallback_scored: list[dict[str, Any]] = []
+        finbert_used = False
         for item in articles:
             item = _flatten_news_item(item)
             published = _published_at(item)
@@ -76,12 +83,21 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
             text = f"{title} {summary}".strip()
             if not text:
                 continue
-            score = _score_sentiment(text)
+            finbert = None if finbert_disabled else _score_sentiment_with_finbert(text)
+            if os.getenv("FINBERT_API_URL") and finbert is None:
+                finbert_failures += 1
+                if finbert_failures >= FINBERT_FAILURE_LIMIT:
+                    finbert_disabled = True
+            score = finbert["sentiment_score"] if finbert else _score_sentiment(text)
             candidate = {
                 "headline": title or text[:180],
                 "score": score,
                 "url": item.get("link") or item.get("url"),
             }
+            if finbert:
+                candidate["finbert_label"] = finbert.get("label")
+                finbert_used = True
+                finbert_failures = 0
             fallback_scored.append(candidate)
             if published is not None and not (min_dt <= published.tz_localize(None) < max_dt):
                 continue
@@ -100,7 +116,7 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
                 "sentiment_label": _sentiment_label(sentiment_score, scored),
                 "article_count": article_count,
                 "top_drivers": [item["headline"] for item in sorted(scored, key=lambda row: abs(row["score"]), reverse=True)[:3]],
-                "source_refs": [f"yfinance.news:{symbol}"],
+                "source_refs": _sentiment_source_refs(symbol, finbert_used=finbert_used),
                 "process_date": pd.Timestamp.utcnow().tz_localize(None),
             }
         )
@@ -209,6 +225,41 @@ def _score_sentiment(text: str) -> float:
     return max(-1.0, min(1.0, (pos - neg) / math.sqrt(pos + neg)))
 
 
+def _score_sentiment_with_finbert(text: str) -> dict[str, Any] | None:
+    api_url = os.getenv("FINBERT_API_URL", "").rstrip("/")
+    if not api_url:
+        return None
+    endpoint = f"{api_url}/sentiment"
+    payload = json.dumps({"text": text}).encode("utf-8")
+    req = urlrequest.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json", "ngrok-skip-browser-warning": "1"},
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=float(os.getenv("FINBERT_API_TIMEOUT", "3"))) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+    score = _num_with_zero(data.get("sentiment_score"))
+    if score is None:
+        positive = _num_with_zero(data.get("positive_prob")) or 0.0
+        negative = _num_with_zero(data.get("negative_prob")) or 0.0
+        score = positive - negative
+    return {
+        "label": str(data.get("label") or "").lower() or None,
+        "sentiment_score": max(-1.0, min(1.0, float(score))),
+    }
+
+
+def _sentiment_source_refs(symbol: str, *, finbert_used: bool) -> list[str]:
+    refs = [f"yfinance.news:{symbol}"]
+    if finbert_used:
+        refs.append("finbert:ProsusAI/finbert")
+    return refs
+
+
 def _sentiment_label(score: float, scored: list[dict[str, Any]]) -> str:
     has_pos = any(item["score"] > 0.2 for item in scored)
     has_neg = any(item["score"] < -0.2 for item in scored)
@@ -237,5 +288,15 @@ def _num(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     if math.isnan(number) or math.isinf(number) or number <= 0:
+        return None
+    return number
+
+
+def _num_with_zero(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or math.isinf(number):
         return None
     return number

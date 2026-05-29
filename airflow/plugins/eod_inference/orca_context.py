@@ -29,11 +29,7 @@ def write_orca_upstream_context(
     sentiment_path: Path | None = None,
     valuation_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Write market/risk/ML context consumed by ORCA agents.
-
-    This artifact intentionally excludes sentiment and valuation. Those tools are
-    optional in ORCA and should be added later from news/fundamental upstreams.
-    """
+    """Write market/risk/ML context plus optional agent context for ORCA."""
     join_keys = ["Datetime", "Symbol", "feature_version"]
     feature_columns = [column for column in ORCA_MARKET_COLUMNS if column in features.columns]
     context = predictions.merge(
