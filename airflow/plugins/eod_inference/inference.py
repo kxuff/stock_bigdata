@@ -10,6 +10,7 @@ import pandas as pd
 from eod_inference.config import PipelineConfig
 from eod_inference.exceptions import PipelineValidationError
 from eod_inference.feature_contract import PRICE_FEATURE_COLUMNS
+from eod_inference.orca_context import write_orca_upstream_context
 from eod_inference.utils import parse_date, read_parquet, stage_dir, write_json
 
 
@@ -28,6 +29,7 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
 
     x = features[list(PRICE_FEATURE_COLUMNS)].astype(float)
     pred_a = np.asarray(model_a["model"].predict(x), dtype=float)
+    _validate_probability_output(pred_a, "Model A")
     risk_prob = _predict_risk(model_c, x)
     if risk_prob is None:
         risk_prob = np.full(shape=len(pred_a), fill_value=np.nan, dtype=float)
@@ -43,11 +45,20 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
 
     batch_path = stage_dir(config, target_date) / "predictions.parquet"
     output.to_parquet(batch_path, index=False)
+    orca_context = write_orca_upstream_context(
+        predictions=output,
+        features=features,
+        stage_path=stage_dir(config, target_date),
+        source_ref_prefix=f"{config.ml_ready_prediction_table}:{target_date.isoformat()}",
+        sentiment_path=_optional_manifest_path(feature_manifest, "sentiment_context"),
+        valuation_path=_optional_manifest_path(feature_manifest, "valuation_context"),
+    )
     manifest = {
         **feature_manifest,
         "prediction_batch": str(batch_path),
         "prediction_rows": int(len(output)),
         "model_version": output["model_version"].iloc[0],
+        **orca_context,
     }
     write_json(stage_dir(config, target_date) / "inference_manifest.json", manifest)
     return manifest
@@ -101,8 +112,16 @@ def _predict_risk(model_c: dict[str, Any] | None, x: pd.DataFrame) -> np.ndarray
     model = model_c["model"]
     if hasattr(model, "predict_proba"):
         proba = model.predict_proba(x)
-        return np.asarray(proba[:, 1], dtype=float)
-    return np.asarray(model.predict(x), dtype=float)
+        risk_prob = np.asarray(proba[:, 1], dtype=float)
+    else:
+        risk_prob = np.asarray(model.predict(x), dtype=float)
+    _validate_probability_output(risk_prob, "Model C")
+    return risk_prob
+
+
+def _validate_probability_output(values: np.ndarray, name: str) -> None:
+    if not np.isfinite(values).all() or (values < 0).any() or (values > 1).any():
+        raise PipelineValidationError(f"{name} must output calibrated probabilities in [0, 1].")
 
 
 def _model_version(model_a: dict[str, Any], model_c: dict[str, Any] | None) -> str:
@@ -111,3 +130,10 @@ def _model_version(model_a: dict[str, Any], model_c: dict[str, Any] | None) -> s
         return version_a
     version_c = str(model_c.get("model_version") or Path(model_c["path"]).stem)
     return f"{version_a}+{version_c}"
+
+
+def _optional_manifest_path(manifest: dict[str, Any], key: str) -> Path | None:
+    value = manifest.get(key)
+    if not value:
+        return None
+    return Path(str(value))
