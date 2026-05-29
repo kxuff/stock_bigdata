@@ -17,6 +17,7 @@ from eod_inference.utils import parse_date, read_parquet, stage_dir, write_json
 def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
     config = PipelineConfig.from_env()
     target_date = parse_date(feature_manifest["as_of_date"])
+    feature_manifest = _with_agent_context(feature_manifest, target_date.isoformat())
     features = read_parquet(Path(feature_manifest["feature_batch"]))
     if features.empty:
         raise PipelineValidationError("No feature rows to score.")
@@ -137,3 +138,12 @@ def _optional_manifest_path(manifest: dict[str, Any], key: str) -> Path | None:
     if not value:
         return None
     return Path(str(value))
+
+
+def _with_agent_context(manifest: dict[str, Any], as_of_date: str) -> dict[str, Any]:
+    if manifest.get("sentiment_context") and manifest.get("valuation_context"):
+        return manifest
+
+    from eod_inference.agent_context import build_agent_context
+
+    return {**manifest, **build_agent_context(as_of_date)}

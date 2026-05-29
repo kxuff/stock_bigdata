@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import uuid
 from datetime import date, datetime
 from typing import Any
@@ -31,7 +32,7 @@ PANDAS_STAGING_BASE = os.getenv("US_STOCK_PANDAS_STAGING_BASE", "s3a://bronze/tm
 
 
 def build_spark() -> SparkSession:
-    driver_host = os.getenv("US_STOCK_SPARK_DRIVER_HOST", "airflow-scheduler")
+    driver_host = os.getenv("US_STOCK_SPARK_DRIVER_HOST", socket.gethostname())
     return (
         SparkSession.builder
         .appName("Airflow_Nessie_Iceberg_Pipeline")
