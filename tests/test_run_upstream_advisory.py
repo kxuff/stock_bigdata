@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from app.schemas.request import AdvisoryDecisionRequest
+from app.schemas.tool_results import ToolResultBundle
 from tools.run_upstream_advisory import build_tool_result_bundle
 
 
@@ -28,6 +29,7 @@ def test_sentiment_source_refs_prefer_sentiment_only_fallbacks() -> None:
         ],
         "base",
     )
+    ToolResultBundle.model_validate(bundle)
 
     assert bundle["sentiment_snapshot"]["source_refs"] == ["sentiment:aaa", "sentiment:bbb", "shared:ccc"]
 
@@ -42,6 +44,7 @@ def test_valuation_source_refs_prefer_valuation_only_fallbacks() -> None:
         ],
         "base",
     )
+    ToolResultBundle.model_validate(bundle)
 
     assert bundle["valuation_snapshot"]["source_refs"] == ["valuation:aaa", "valuation:bbb", "shared:ccc"]
 
@@ -52,6 +55,7 @@ def test_pred_a_drives_probability_final_score_drives_trend() -> None:
         [{"Symbol": "AAA", "pred_a": 0.8, "final_score": -0.4, "risk_prob": 0.9}],
         "base",
     )
+    ToolResultBundle.model_validate(bundle)
 
     assert bundle["ml_predictions"]["data"]["AAA"]["probability_up"] == 0.8
     assert bundle["market_features"]["data"]["AAA"]["trend_direction"] == "DOWN"
@@ -63,6 +67,7 @@ def test_missing_risk_prob_uses_neutral_schema_fallback_without_damping_ml_proba
         [{"Symbol": "AAA", "pred_a": 0.8, "final_score": -0.4}],
         "base",
     )
+    ToolResultBundle.model_validate(bundle)
 
     ml = bundle["ml_predictions"]["data"]["AAA"]
     risk = bundle["risk_snapshot"]["data"]["AAA"]
