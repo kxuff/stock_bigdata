@@ -49,6 +49,8 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
         features=features,
         stage_path=stage_dir(config, target_date),
         source_ref_prefix=f"{config.ml_ready_prediction_table}:{target_date.isoformat()}",
+        sentiment_path=_optional_manifest_path(feature_manifest, "sentiment_context"),
+        valuation_path=_optional_manifest_path(feature_manifest, "valuation_context"),
     )
     manifest = {
         **feature_manifest,
@@ -119,3 +121,10 @@ def _model_version(model_a: dict[str, Any], model_c: dict[str, Any] | None) -> s
         return version_a
     version_c = str(model_c.get("model_version") or Path(model_c["path"]).stem)
     return f"{version_a}+{version_c}"
+
+
+def _optional_manifest_path(manifest: dict[str, Any], key: str) -> Path | None:
+    value = manifest.get(key)
+    if not value:
+        return None
+    return Path(str(value))

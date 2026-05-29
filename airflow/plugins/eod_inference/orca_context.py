@@ -26,6 +26,8 @@ def write_orca_upstream_context(
     features: pd.DataFrame,
     stage_path: Path,
     source_ref_prefix: str,
+    sentiment_path: Path | None = None,
+    valuation_path: Path | None = None,
 ) -> dict[str, Any]:
     """Write market/risk/ML context consumed by ORCA agents.
 
@@ -47,20 +49,43 @@ def write_orca_upstream_context(
     context["market_context_symbol"] = "SPY"
     context["orca_context_version"] = "orca_market_risk_ml_v1"
 
+    included = ["market_features", "ml_predictions", "risk_snapshot"]
+    excluded = ["portfolio_snapshot"]
+    sentiment = _read_optional_context(sentiment_path)
+    if not sentiment.empty:
+        context = context.merge(sentiment, on="Symbol", how="left")
+        if context["sentiment_score"].notna().any():
+            included.append("sentiment_snapshot")
+        else:
+            excluded.append("sentiment_snapshot")
+    else:
+        excluded.append("sentiment_snapshot")
+
+    valuation = _read_optional_context(valuation_path)
+    if not valuation.empty:
+        context = context.merge(valuation, on="Symbol", how="left")
+        if context["valuation_label"].notna().any():
+            included.append("valuation_snapshot")
+        else:
+            excluded.append("valuation_snapshot")
+    else:
+        excluded.append("valuation_snapshot")
+
     output_path = stage_path / "orca_upstream.json"
     context.to_json(output_path, orient="records", date_format="iso")
     return {
         "orca_upstream_context": str(output_path),
         "orca_context_rows": int(len(context)),
         "orca_context_version": "orca_market_risk_ml_v1",
-        "orca_context_includes": [
-            "market_features",
-            "ml_predictions",
-            "risk_snapshot",
-        ],
-        "orca_context_excludes": [
-            "sentiment_snapshot",
-            "valuation_snapshot",
-            "portfolio_snapshot",
-        ],
+        "orca_context_includes": included,
+        "orca_context_excludes": excluded,
     }
+
+
+def _read_optional_context(path: Path | None) -> pd.DataFrame:
+    if path is None or not path.exists():
+        return pd.DataFrame()
+    frame = pd.read_parquet(path)
+    if frame.empty or "Symbol" not in frame.columns:
+        return pd.DataFrame()
+    return frame
