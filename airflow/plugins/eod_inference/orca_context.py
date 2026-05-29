@@ -49,6 +49,7 @@ def write_orca_upstream_context(
     excluded = ["portfolio_snapshot"]
     sentiment = _read_optional_context(sentiment_path)
     if not sentiment.empty:
+        sentiment = sentiment.rename(columns={"source_refs": "sentiment_source_refs"})
         context = context.merge(sentiment, on="Symbol", how="left")
         if context["sentiment_score"].notna().any():
             included.append("sentiment_snapshot")
@@ -59,6 +60,7 @@ def write_orca_upstream_context(
 
     valuation = _read_optional_context(valuation_path)
     if not valuation.empty:
+        valuation = valuation.rename(columns={"source_refs": "valuation_source_refs"})
         context = context.merge(valuation, on="Symbol", how="left")
         if context["valuation_label"].notna().any():
             included.append("valuation_snapshot")

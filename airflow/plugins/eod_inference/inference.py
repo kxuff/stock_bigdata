@@ -29,6 +29,7 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
 
     x = features[list(PRICE_FEATURE_COLUMNS)].astype(float)
     pred_a = np.asarray(model_a["model"].predict(x), dtype=float)
+    _validate_probability_output(pred_a, "Model A")
     risk_prob = _predict_risk(model_c, x)
     if risk_prob is None:
         risk_prob = np.full(shape=len(pred_a), fill_value=np.nan, dtype=float)
@@ -111,8 +112,16 @@ def _predict_risk(model_c: dict[str, Any] | None, x: pd.DataFrame) -> np.ndarray
     model = model_c["model"]
     if hasattr(model, "predict_proba"):
         proba = model.predict_proba(x)
-        return np.asarray(proba[:, 1], dtype=float)
-    return np.asarray(model.predict(x), dtype=float)
+        risk_prob = np.asarray(proba[:, 1], dtype=float)
+    else:
+        risk_prob = np.asarray(model.predict(x), dtype=float)
+    _validate_probability_output(risk_prob, "Model C")
+    return risk_prob
+
+
+def _validate_probability_output(values: np.ndarray, name: str) -> None:
+    if not np.isfinite(values).all() or (values < 0).any() or (values > 1).any():
+        raise PipelineValidationError(f"{name} must output calibrated probabilities in [0, 1].")
 
 
 def _model_version(model_a: dict[str, Any], model_c: dict[str, Any] | None) -> str:
