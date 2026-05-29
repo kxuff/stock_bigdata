@@ -10,6 +10,7 @@ import pandas as pd
 from eod_inference.config import PipelineConfig
 from eod_inference.exceptions import PipelineValidationError
 from eod_inference.feature_contract import PRICE_FEATURE_COLUMNS
+from eod_inference.orca_context import write_orca_upstream_context
 from eod_inference.utils import parse_date, read_parquet, stage_dir, write_json
 
 
@@ -43,11 +44,18 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
 
     batch_path = stage_dir(config, target_date) / "predictions.parquet"
     output.to_parquet(batch_path, index=False)
+    orca_context = write_orca_upstream_context(
+        predictions=output,
+        features=features,
+        stage_path=stage_dir(config, target_date),
+        source_ref_prefix=f"{config.ml_ready_prediction_table}:{target_date.isoformat()}",
+    )
     manifest = {
         **feature_manifest,
         "prediction_batch": str(batch_path),
         "prediction_rows": int(len(output)),
         "model_version": output["model_version"].iloc[0],
+        **orca_context,
     }
     write_json(stage_dir(config, target_date) / "inference_manifest.json", manifest)
     return manifest
