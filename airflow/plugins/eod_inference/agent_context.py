@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import math
 import json
+import math
 import os
 from datetime import timedelta
 from typing import Any
@@ -14,14 +14,6 @@ from eod_inference.config import PipelineConfig
 from eod_inference.utils import parse_date, stage_dir, write_json
 
 
-POSITIVE_TERMS = {
-    "beat", "beats", "bullish", "buy", "growth", "gain", "gains", "higher", "outperform",
-    "positive", "profit", "profits", "record", "rebound", "upgrade", "upside", "strong",
-}
-NEGATIVE_TERMS = {
-    "bearish", "cut", "decline", "downgrade", "drop", "falls", "fall", "loss", "losses",
-    "lower", "miss", "misses", "negative", "pressure", "risk", "sell", "slowdown", "weak",
-}
 SECTOR_PE_FALLBACK = {
     "Technology": 30.0,
     "Communication Services": 24.0,
@@ -35,8 +27,6 @@ SECTOR_PE_FALLBACK = {
     "Real Estate": 18.0,
     "Basic Materials": 16.0,
 }
-FINBERT_FAILURE_LIMIT = int(os.getenv("FINBERT_FAILURE_LIMIT", "3"))
-
 
 def build_agent_context(as_of_date: str) -> dict[str, Any]:
     config = PipelineConfig.from_env()
@@ -64,16 +54,16 @@ def build_agent_context(as_of_date: str) -> dict[str, Any]:
 
 
 def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
+    if not os.getenv("FINBERT_API_URL", "").rstrip("/"):
+        raise RuntimeError("FINBERT_API_URL is required for sentiment scoring")
     rows: list[dict[str, Any]] = []
     min_dt = pd.Timestamp(target_date - timedelta(days=7))
     max_dt = pd.Timestamp(target_date + timedelta(days=1))
-    finbert_disabled = False
-    finbert_failures = 0
     for symbol in symbols:
+        aliases = _symbol_aliases(symbol)
         articles = _news_items(symbol)
         scored: list[dict[str, Any]] = []
         fallback_scored: list[dict[str, Any]] = []
-        finbert_used = False
         for item in articles:
             item = _flatten_news_item(item)
             published = _published_at(item)
@@ -83,22 +73,16 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
             text = f"{title} {summary}".strip()
             if not text:
                 continue
-            finbert = None if finbert_disabled else _score_sentiment_with_finbert(text)
-            if os.getenv("FINBERT_API_URL") and finbert is None:
-                finbert_failures += 1
-                if finbert_failures >= FINBERT_FAILURE_LIMIT:
-                    finbert_disabled = True
-            score = finbert["sentiment_score"] if finbert else _score_sentiment(text)
+            if not _is_relevant_news(text, aliases):
+                continue
+            finbert = _score_sentiment_with_finbert(text)
             candidate = {
                 "headline": title or text[:180],
-                "score": score,
+                "score": finbert["sentiment_score"],
                 "url": item.get("link") or item.get("url"),
                 "published_at": published,
+                "finbert_label": finbert.get("label"),
             }
-            if finbert:
-                candidate["finbert_label"] = finbert.get("label")
-                finbert_used = True
-                finbert_failures = 0
             fallback_scored.append(candidate)
             if published is not None and not (min_dt <= published.tz_localize(None) < max_dt):
                 continue
@@ -128,7 +112,7 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
                 "sentiment_scored_at": scored_at,
                 "stale_article_count": stale_article_count,
                 "top_drivers": [item["headline"] for item in sorted(scored, key=lambda row: abs(row["score"]), reverse=True)[:3]],
-                "source_refs": _sentiment_source_refs(symbol, finbert_used=finbert_used),
+                "source_refs": _sentiment_source_refs(symbol),
                 "process_date": scored_at,
             }
         )
@@ -234,6 +218,26 @@ def _ticker_info(symbol: str) -> dict[str, Any]:
         return {}
 
 
+def _symbol_aliases(symbol: str) -> set[str]:
+    aliases = {symbol.upper()}
+    info = _ticker_info(symbol)
+    for key in ("shortName", "longName", "displayName"):
+        value = str(info.get(key) or "").strip()
+        if value:
+            aliases.add(value.lower())
+            aliases.add(value.replace("Inc.", "").replace("Inc", "").strip().lower())
+    return {alias for alias in aliases if alias}
+
+
+def _is_relevant_news(text: str, aliases: set[str]) -> bool:
+    normalized = text.lower()
+    tokens = {token.strip(".,:;!?()[]{}\"'").upper() for token in text.split()}
+    for alias in aliases:
+        if alias.upper() in tokens or alias.lower() in normalized:
+            return True
+    return False
+
+
 def _published_at(item: dict[str, Any]) -> pd.Timestamp | None:
     value = item.get("providerPublishTime") or item.get("pubDate")
     if value is None:
@@ -246,19 +250,10 @@ def _published_at(item: dict[str, Any]) -> pd.Timestamp | None:
         return None
 
 
-def _score_sentiment(text: str) -> float:
-    words = [word.strip(".,:;!?()[]{}\"'").lower() for word in text.split()]
-    pos = sum(word in POSITIVE_TERMS for word in words)
-    neg = sum(word in NEGATIVE_TERMS for word in words)
-    if pos == 0 and neg == 0:
-        return 0.0
-    return max(-1.0, min(1.0, (pos - neg) / math.sqrt(pos + neg)))
-
-
-def _score_sentiment_with_finbert(text: str) -> dict[str, Any] | None:
+def _score_sentiment_with_finbert(text: str) -> dict[str, Any]:
     api_url = os.getenv("FINBERT_API_URL", "").rstrip("/")
     if not api_url:
-        return None
+        raise RuntimeError("FINBERT_API_URL is required for sentiment scoring")
     endpoint = f"{api_url}/sentiment"
     payload = json.dumps({"text": text}).encode("utf-8")
     req = urlrequest.Request(
@@ -270,8 +265,8 @@ def _score_sentiment_with_finbert(text: str) -> dict[str, Any] | None:
     try:
         with urlrequest.urlopen(req, timeout=float(os.getenv("FINBERT_API_TIMEOUT", "3"))) as response:
             data = json.loads(response.read().decode("utf-8"))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f"FinBERT API request failed: {endpoint}") from exc
     score = _num_with_zero(data.get("sentiment_score"))
     if score is None:
         positive = _num_with_zero(data.get("positive_prob")) or 0.0
@@ -283,11 +278,8 @@ def _score_sentiment_with_finbert(text: str) -> dict[str, Any] | None:
     }
 
 
-def _sentiment_source_refs(symbol: str, *, finbert_used: bool) -> list[str]:
-    refs = [f"yfinance.news:{symbol}"]
-    if finbert_used:
-        refs.append("finbert:ProsusAI/finbert")
-    return refs
+def _sentiment_source_refs(symbol: str) -> list[str]:
+    return [f"yfinance.news:{symbol}", "finbert:ProsusAI/finbert"]
 
 
 def _sentiment_label(score: float, scored: list[dict[str, Any]]) -> str:

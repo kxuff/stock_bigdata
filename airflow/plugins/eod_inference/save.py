@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from eod_inference.config import MARKET_CONTEXT_SYMBOL, PipelineConfig
 from eod_inference.exceptions import PipelineValidationError
 from eod_inference.iceberg import (
@@ -33,6 +35,20 @@ def save_predictions(prediction_manifest: dict[str, Any]) -> dict[str, Any]:
             config.ml_ready_prediction_table,
             keys=["Datetime", "Symbol", "model_version", "feature_version"],
         )
+        _save_optional_context_table(
+            spark,
+            prediction_manifest,
+            manifest_key="sentiment_context",
+            table_name=config.ml_ready_sentiment_table,
+            keys=["as_of_date", "Symbol"],
+        )
+        _save_optional_context_table(
+            spark,
+            prediction_manifest,
+            manifest_key="valuation_context",
+            table_name=config.ml_ready_valuation_table,
+            keys=["as_of_date", "Symbol"],
+        )
 
         state = {
             "initialized": True,
@@ -43,6 +59,10 @@ def save_predictions(prediction_manifest: dict[str, Any]) -> dict[str, Any]:
             "model_version": prediction_manifest["model_version"],
             "prediction_table": config.ml_ready_prediction_table,
             "prediction_table_location": config.ml_ready_prediction_location,
+            "sentiment_table": config.ml_ready_sentiment_table,
+            "sentiment_table_location": config.ml_ready_sentiment_location,
+            "valuation_table": config.ml_ready_valuation_table,
+            "valuation_table_location": config.ml_ready_valuation_location,
             "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
         }
         write_json(config.data_dir / "state.json", state)
@@ -50,6 +70,10 @@ def save_predictions(prediction_manifest: dict[str, Any]) -> dict[str, Any]:
             **prediction_manifest,
             "prediction_table": config.ml_ready_prediction_table,
             "prediction_table_location": config.ml_ready_prediction_location,
+            "sentiment_table": config.ml_ready_sentiment_table,
+            "sentiment_table_location": config.ml_ready_sentiment_location,
+            "valuation_table": config.ml_ready_valuation_table,
+            "valuation_table_location": config.ml_ready_valuation_location,
             "saved_prediction_rows": int(len(predictions)),
             "state_path": str(config.data_dir / "state.json"),
         }
@@ -57,3 +81,39 @@ def save_predictions(prediction_manifest: dict[str, Any]) -> dict[str, Any]:
         return manifest
     finally:
         stop_spark(spark)
+
+
+def _save_optional_context_table(
+    spark,
+    prediction_manifest: dict[str, Any],
+    *,
+    manifest_key: str,
+    table_name: str,
+    keys: list[str],
+) -> int:
+    path = prediction_manifest.get(manifest_key)
+    if not path:
+        return 0
+    context = read_parquet(Path(path))
+    if context.empty:
+        return 0
+    context = _normalize_context_for_iceberg(context)
+    merge_pandas_to_iceberg(spark, context, table_name, keys=keys)
+    return int(len(context))
+
+
+def _normalize_context_for_iceberg(context: pd.DataFrame) -> pd.DataFrame:
+    normalized = context.copy()
+    for column in ["as_of_date", "fundamentals_as_of"]:
+        if column in normalized.columns:
+            normalized[column] = pd.to_datetime(normalized[column], errors="coerce").dt.date
+    for column in [
+        "latest_article_published_at",
+        "oldest_article_published_at",
+        "sentiment_scored_at",
+        "valuation_fetched_at",
+        "process_date",
+    ]:
+        if column in normalized.columns:
+            normalized[column] = pd.to_datetime(normalized[column], errors="coerce").dt.tz_localize(None)
+    return normalized

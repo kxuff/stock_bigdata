@@ -118,6 +118,8 @@ def ensure_iceberg_tables(spark: SparkSession, config: PipelineConfig) -> None:
         config.curated_price_table,
         config.ml_ready_feature_table,
         config.ml_ready_prediction_table,
+        config.ml_ready_sentiment_table,
+        config.ml_ready_valuation_table,
     ]:
         spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {table_ref(namespace(table_name))}")
 
@@ -202,6 +204,53 @@ def ensure_iceberg_tables(spark: SparkSession, config: PipelineConfig) -> None:
         USING iceberg
         PARTITIONED BY (days(Datetime))
         LOCATION '{config.ml_ready_prediction_location}'
+        TBLPROPERTIES ('write.format.default'='parquet')
+        """
+    )
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table_ref(config.ml_ready_sentiment_table)} (
+            as_of_date date,
+            Symbol string,
+            sentiment_score double,
+            sentiment_label string,
+            article_count int,
+            latest_article_published_at timestamp,
+            oldest_article_published_at timestamp,
+            sentiment_scored_at timestamp,
+            stale_article_count int,
+            top_drivers array<string>,
+            source_refs array<string>,
+            process_date timestamp
+        )
+        USING iceberg
+        PARTITIONED BY (as_of_date)
+        LOCATION '{config.ml_ready_sentiment_location}'
+        TBLPROPERTIES ('write.format.default'='parquet')
+        """
+    )
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table_ref(config.ml_ready_valuation_table)} (
+            as_of_date date,
+            Symbol string,
+            valuation_label string,
+            pe_ratio double,
+            sector_pe_ratio double,
+            fair_value_estimate double,
+            upside_downside_pct double,
+            valuation_method string,
+            valuation_quality string,
+            valuation_fetched_at timestamp,
+            fundamentals_as_of date,
+            sector_sample_count int,
+            analyst_count double,
+            source_refs array<string>,
+            process_date timestamp
+        )
+        USING iceberg
+        PARTITIONED BY (as_of_date)
+        LOCATION '{config.ml_ready_valuation_location}'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
@@ -304,7 +353,9 @@ def merge_spark_to_iceberg(df, table_name: str, *, keys: list[str]) -> None:
             df = df.withColumn(column, lit(None))
             
     updates = df.select(*target_columns).dropDuplicates(keys)
-    updates = updates.sortWithinPartitions("Datetime", "Symbol")
+    sort_columns = [column for column in ["Datetime", "as_of_date", "Symbol"] if column in updates.columns]
+    if sort_columns:
+        updates = updates.sortWithinPartitions(*sort_columns)
     view_name = f"updates_{table_name.replace('.', '_')}_{int(datetime.utcnow().timestamp())}"
     updates.createOrReplaceTempView(view_name)
     join_condition = " AND ".join([f"target.{key} <=> updates.{key}" for key in keys])

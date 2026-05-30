@@ -362,6 +362,43 @@ services:
     networks:
       - default
 
+  orca-api:
+    build:
+      context: ./orca-agent-advisory
+      dockerfile: Dockerfile
+    container_name: orca-api
+    environment:
+      LLM_PROVIDER: litellm
+      LLM_MODEL: openai/oc/deepseek-v4-flash-free
+      LLM_BASE_URL: http://host.docker.internal:20128/v1
+      LLM_API_KEY: ${NINEROUTER_KEY:-dummy}
+      ORCA_TOOL_RESULT_PROVIDER: bigdata
+      ORCA_ICEBERG_CATALOG: nessie
+      ORCA_SPARK_MASTER: local[2]
+      ORCA_NESSIE_URI: http://nessie:19120/api/v2
+      ORCA_S3_ENDPOINT_URL: http://minio:9000
+      ORCA_MINIO_ACCESS_KEY: admin
+      ORCA_MINIO_SECRET_KEY: password
+      ORCA_ML_PREDICTION_TABLE: ml_ready.stock_predictions
+      ORCA_ML_FEATURE_TABLE: ml_ready.stock_price_features
+      ORCA_CURATED_PRICE_TABLE: curated.us_stock_eod_prices
+      ORCA_SENTIMENT_TABLE: ml_ready.stock_sentiment_context
+      ORCA_VALUATION_TABLE: ml_ready.stock_valuation_context
+      ORCA_CONTEXT_MAX_AGE_SECONDS: "86400"
+      CREWAI_TRACING_ENABLED: "false"
+      CREWAI_VERBOSE: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - spark-master
+      - spark-worker
+      - nessie
+      - minio
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+
 volumes:
   zookeeper_data:
   zookeeper_logs:

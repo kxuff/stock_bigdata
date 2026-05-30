@@ -59,7 +59,6 @@ docker compose exec -T \
   -e US_STOCK_BACKFILL_CALENDAR_DAYS='500' \
   -e FINBERT_API_URL='https://parrot-sublease-preamble.ngrok-free.dev' \
   -e FINBERT_API_TIMEOUT='3' \
-  -e FINBERT_FAILURE_LIMIT='3' \
   airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py \
   --run-date 2026-05-29
 ```
@@ -74,7 +73,13 @@ extract_eod_prices
 → save_predictions
 ```
 
-`run_ml_inference()` auto-builds sentiment and valuation context when missing, then writes ORCA upstream context.
+`run_ml_inference()` auto-builds sentiment and valuation context when missing, then writes ORCA upstream context. `save_predictions()` also persists full upstream ORCA layers to Iceberg:
+
+```text
+nessie.ml_ready.stock_predictions
+nessie.ml_ready.stock_sentiment_context
+nessie.ml_ready.stock_valuation_context
+```
 
 Expected output shape:
 
@@ -120,7 +125,6 @@ docker compose exec -T \
   -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' \
   -e FINBERT_API_URL='https://parrot-sublease-preamble.ngrok-free.dev' \
   -e FINBERT_API_TIMEOUT='3' \
-  -e FINBERT_FAILURE_LIMIT='3' \
   airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py \
   --run-date 2026-05-29
 ```
@@ -132,18 +136,35 @@ If incremental run fails with not enough lookback history, rerun first-run comma
 -e US_STOCK_BACKFILL_CALENDAR_DAYS='500'
 ```
 
-## 4. Run ORCA advisory
+## 4. Run ORCA advisory with live agents
 
 From `orca-agent-advisory`:
 
 ```bash
 cd /home/ming/Desktop/bigdata/orca-agent-advisory
+uv run uvicorn app.main:app --reload
+```
 
-uv run python tools/run_upstream_advisory.py \
-  --request samples/normal_request.json \
-  --upstream /home/ming/Desktop/bigdata/stock_bigdata/data/eod_batch/staging/20260529/orca_upstream.json \
-  --source-ref 'nessie.ml_ready.stock_predictions:2026-05-29' \
-  --output-dir outputs/advisory_decisions
+In another terminal, call API:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/advisory/decision \
+  -H 'Content-Type: application/json' \
+  --data @samples/normal_request.json
+```
+
+Set `ORCA_TOOL_RESULT_PROVIDER=bigdata` to read Spark/Iceberg data, or `ORCA_TOOL_RESULT_PROVIDER=sample` for sample tool-result fixtures. Deterministic upstream CLI removed; runtime advisory path must use ORCA agent service.
+
+Full upstream layer env:
+
+```env
+ORCA_TOOL_RESULT_PROVIDER=bigdata
+ORCA_ICEBERG_CATALOG=nessie
+ORCA_ML_PREDICTION_TABLE=ml_ready.stock_predictions
+ORCA_ML_FEATURE_TABLE=ml_ready.stock_price_features
+ORCA_CURATED_PRICE_TABLE=curated.us_stock_eod_prices
+ORCA_SENTIMENT_TABLE=ml_ready.stock_sentiment_context
+ORCA_VALUATION_TABLE=ml_ready.stock_valuation_context
 ```
 
 Expected output fields:
@@ -175,15 +196,11 @@ Remove this line from EOD command:
 
 This is slower, but closer to full demo scope.
 
-## 6. Optional: no FinBERT server
+## 6. Required: FinBERT server
 
-If FinBERT/ngrok is unavailable, remove:
+`FINBERT_API_URL` is required for sentiment scoring. If FinBERT/ngrok is unavailable, EOD sentiment context fails fast. There is no lexical fallback.
 
-```bash
--e FINBERT_API_URL='https://parrot-sublease-preamble.ngrok-free.dev'
-```
-
-Sentiment falls back to lexical scoring. Output can still include `sentiment_snapshot`, but source refs will not cite FinBERT.
+Sentiment source refs always cite both `yfinance.news:{symbol}` and `finbert:ProsusAI/finbert` when sentiment rows are produced.
 
 ## 7. Troubleshooting
 

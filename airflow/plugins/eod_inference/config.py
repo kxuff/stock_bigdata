@@ -29,6 +29,8 @@ RAW_PRICE_TABLE_NAME = os.getenv("US_STOCK_RAW_PRICE_TABLE", "raw.us_stock_eod_p
 CURATED_PRICE_TABLE_NAME = os.getenv("US_STOCK_CURATED_PRICE_TABLE", "curated.us_stock_eod_prices")
 ML_READY_FEATURE_TABLE_NAME = os.getenv("US_STOCK_ML_READY_FEATURE_TABLE", "ml_ready.stock_price_features")
 ML_READY_PREDICTION_TABLE_NAME = os.getenv("US_STOCK_ML_READY_PREDICTION_TABLE", "ml_ready.stock_predictions")
+ML_READY_SENTIMENT_TABLE_NAME = os.getenv("US_STOCK_ML_READY_SENTIMENT_TABLE", "ml_ready.stock_sentiment_context")
+ML_READY_VALUATION_TABLE_NAME = os.getenv("US_STOCK_ML_READY_VALUATION_TABLE", "ml_ready.stock_valuation_context")
 
 RAW_PRICE_TABLE_LOCATION = os.getenv("US_STOCK_RAW_PRICE_LOCATION", "s3a://bronze/raw/us_stock_eod_prices")
 CURATED_PRICE_TABLE_LOCATION = os.getenv("US_STOCK_CURATED_PRICE_LOCATION", "s3a://silver/curated/us_stock_eod_prices")
@@ -39,6 +41,14 @@ ML_READY_FEATURE_TABLE_LOCATION = os.getenv(
 ML_READY_PREDICTION_TABLE_LOCATION = os.getenv(
     "US_STOCK_ML_READY_PREDICTION_LOCATION",
     "s3a://prediction/ml_ready/stock_predictions",
+)
+ML_READY_SENTIMENT_TABLE_LOCATION = os.getenv(
+    "US_STOCK_ML_READY_SENTIMENT_LOCATION",
+    "s3a://prediction/ml_ready/stock_sentiment_context",
+)
+ML_READY_VALUATION_TABLE_LOCATION = os.getenv(
+    "US_STOCK_ML_READY_VALUATION_LOCATION",
+    "s3a://prediction/ml_ready/stock_valuation_context",
 )
 
 
@@ -58,10 +68,14 @@ class PipelineConfig:
     curated_price_table: str
     ml_ready_feature_table: str
     ml_ready_prediction_table: str
+    ml_ready_sentiment_table: str
+    ml_ready_valuation_table: str
     raw_price_location: str
     curated_price_location: str
     ml_ready_feature_location: str
     ml_ready_prediction_location: str
+    ml_ready_sentiment_location: str
+    ml_ready_valuation_location: str
 
     @classmethod
     def from_env(cls) -> "PipelineConfig":
@@ -91,6 +105,14 @@ class PipelineConfig:
                 catalog,
                 os.getenv("US_STOCK_ML_READY_PREDICTION_TABLE", ML_READY_PREDICTION_TABLE_NAME),
             ),
+            ml_ready_sentiment_table=_qualified_table(
+                catalog,
+                os.getenv("US_STOCK_ML_READY_SENTIMENT_TABLE", ML_READY_SENTIMENT_TABLE_NAME),
+            ),
+            ml_ready_valuation_table=_qualified_table(
+                catalog,
+                os.getenv("US_STOCK_ML_READY_VALUATION_TABLE", ML_READY_VALUATION_TABLE_NAME),
+            ),
             raw_price_location=os.getenv("US_STOCK_RAW_PRICE_LOCATION", RAW_PRICE_TABLE_LOCATION),
             curated_price_location=os.getenv("US_STOCK_CURATED_PRICE_LOCATION", CURATED_PRICE_TABLE_LOCATION),
             ml_ready_feature_location=os.getenv("US_STOCK_ML_READY_FEATURE_LOCATION", ML_READY_FEATURE_TABLE_LOCATION),
@@ -98,6 +120,8 @@ class PipelineConfig:
                 "US_STOCK_ML_READY_PREDICTION_LOCATION",
                 ML_READY_PREDICTION_TABLE_LOCATION,
             ),
+            ml_ready_sentiment_location=os.getenv("US_STOCK_ML_READY_SENTIMENT_LOCATION", ML_READY_SENTIMENT_TABLE_LOCATION),
+            ml_ready_valuation_location=os.getenv("US_STOCK_ML_READY_VALUATION_LOCATION", ML_READY_VALUATION_TABLE_LOCATION),
         )
 
 
