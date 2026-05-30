@@ -43,6 +43,17 @@ Nessie API: http://localhost:19120/api/v2
 ORCA API: http://localhost:8000
 ```
 
+## Streamlit placeholder UI
+
+Run the mock-first multipage UI:
+
+```bash
+pip install -r streamlit_app/requirements.txt
+streamlit run streamlit_app/app.py
+```
+
+Pages include Dashboard, AI Chat, and AI Stock Picks. No backend calls run by default.
+
 ## Configure secrets
 
 Do not commit API keys. Set the 9router key in the current shell before starting ORCA:
