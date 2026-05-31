@@ -25,7 +25,11 @@ def run(run_date: str) -> dict[str, Any]:
     extract_manifest = extract_eod_prices(run_date)
     clean_manifest = clean_validate_prices(extract_manifest)
     feature_manifest = engineer_features(clean_manifest)
-    context_manifest = build_agent_context(feature_manifest) if os.getenv("FINBERT_API_URL", "").strip() else feature_manifest
+    context_manifest = (
+        {**feature_manifest, **build_agent_context(feature_manifest["as_of_date"])}
+        if os.getenv("FINBERT_API_URL", "").strip()
+        else feature_manifest
+    )
     inference_manifest = run_ml_inference(context_manifest)
     save_manifest = save_predictions(inference_manifest)
 

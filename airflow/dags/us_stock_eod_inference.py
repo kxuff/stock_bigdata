@@ -48,6 +48,8 @@ def _sync_airflow_variables_to_env() -> None:
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",
         "ML_FEATURE_VERSION",
+        "FINBERT_API_URL",
+        "FINBERT_API_TIMEOUT",
     ]
     for name in variable_names:
         value = Variable.get(name, default_var=None)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import base64
+import json
 from datetime import UTC, datetime
 from html import escape
-from time import sleep
 from uuid import uuid4
 
 import streamlit as st
@@ -255,7 +256,74 @@ def _safe_api_error(exc: Exception) -> str:
     return f"ORCA API error: {exc.__class__.__name__}"
 
 
-def _run_orca_flow(prompt: str, symbol: str, horizon_value: str, risk_value: str) -> str:
+def _pending_jobs() -> list[dict]:
+    if "pending_orca_jobs" not in st.session_state:
+        st.session_state.pending_orca_jobs = _load_pending_jobs_from_query()
+    return st.session_state.pending_orca_jobs
+
+
+def _load_pending_jobs_from_query() -> list[dict]:
+    encoded = st.query_params.get("orca_jobs")
+    if not encoded:
+        return []
+    try:
+        padded = encoded + "=" * (-len(encoded) % 4)
+        jobs = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(jobs, list):
+        return []
+    return [job for job in jobs if isinstance(job, dict) and job.get("job_id")]
+
+
+def _sync_pending_jobs_to_query() -> None:
+    jobs = _pending_jobs()
+    if not jobs:
+        if "orca_jobs" in st.query_params:
+            del st.query_params["orca_jobs"]
+        return
+    compact_jobs = [
+        {
+            "job_id": job.get("job_id"),
+            "symbol": job.get("symbol"),
+            "prompt": job.get("prompt"),
+            "created_at": job.get("created_at"),
+            "status": job.get("status"),
+        }
+        for job in jobs
+    ]
+    encoded = base64.urlsafe_b64encode(json.dumps(compact_jobs, separators=(",", ":")).encode()).decode().rstrip("=")
+    st.query_params["orca_jobs"] = encoded
+
+
+def _append_assistant_message_once(message_id: str, content: str) -> None:
+    if message_id in st.session_state.completed_orca_message_ids:
+        return
+    st.session_state.messages.append({"role": "assistant", "content": content})
+    st.session_state.completed_orca_message_ids.add(message_id)
+
+
+def _remove_pending_job(job_id: str) -> None:
+    st.session_state.pending_orca_jobs = [job for job in _pending_jobs() if job.get("job_id") != job_id]
+    _sync_pending_jobs_to_query()
+
+
+def _job_error_message(job: dict, status_payload: dict | None = None) -> str:
+    payload = status_payload or job
+    error = payload.get("error") or {}
+    error_code = payload.get("error_code") or error.get("code") or "unknown_error"
+    error_message = payload.get("error_message") or error.get("message") or "ORCA job failed."
+    return f"""
+### ORCA job failed: {job.get('symbol', 'N/A')}
+**Job ID:** `{job.get('job_id', 'N/A')}`  
+**Status:** `{payload.get('status', 'failed')}`  
+**Error code:** `{error_code}`
+
+{error_message}
+"""
+
+
+def _submit_orca_job(prompt: str, symbol: str, horizon_value: str, risk_value: str) -> str:
     if not symbol:
         return "ORCA API error: select at least one symbol."
     try:
@@ -266,17 +334,79 @@ def _run_orca_flow(prompt: str, symbol: str, horizon_value: str, risk_value: str
             return f"ORCA data not ready for {symbol}. Blocking checks: `{_readiness_failure_summary(readiness)}`"
         job = create_decision_job(_request_payload(prompt, symbol, _horizon_value(horizon_value), _risk_value(risk_value)))
         job_id = job["job_id"]
-        for _ in range(24):
-            status_payload = get_decision_job(job_id)
-            if status_payload.get("status") in {"succeeded", "failed"}:
-                break
-            sleep(1)
-        result_status, result = get_decision_job_result(job_id)
-        if result_status == 202:
-            return f"ORCA job `{job_id}` still running. Try again soon."
-        return _format_decision(result)
+        _pending_jobs().append(
+            {
+                "job_id": job_id,
+                "symbol": symbol,
+                "prompt": prompt,
+                "created_at": datetime.now(UTC).isoformat(),
+                "status": job.get("status", "queued"),
+            }
+        )
+        _sync_pending_jobs_to_query()
+        return f"ORCA job `{job_id}` queued for `{symbol}`. Use pending job controls below to refresh or fetch result."
     except Exception as exc:  # noqa: BLE001 - UI must show API failure, no fake content.
         return _safe_api_error(exc)
+
+
+def _refresh_job_status(job: dict) -> None:
+    try:
+        status_payload = get_decision_job(job["job_id"])
+        job.update(
+            {
+                "status": status_payload.get("status", job.get("status", "unknown")),
+                "progress_stage": status_payload.get("progress_stage"),
+                "progress_pct": status_payload.get("progress_pct"),
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        _sync_pending_jobs_to_query()
+        if job["status"] == "failed":
+            _append_assistant_message_once(f"{job['job_id']}:failed", _job_error_message(job, status_payload))
+            _remove_pending_job(job["job_id"])
+    except Exception as exc:  # noqa: BLE001 - status refresh should not crash UI.
+        st.error(_safe_api_error(exc))
+
+
+def _fetch_job_result(job: dict) -> None:
+    try:
+        result_status, result = get_decision_job_result(job["job_id"])
+        if result_status == 202:
+            job["status"] = result.get("status", job.get("status", "running"))
+            job["updated_at"] = datetime.now(UTC).isoformat()
+            _sync_pending_jobs_to_query()
+            st.info(f"ORCA job `{job['job_id']}` still `{job['status']}`.")
+            return
+        _append_assistant_message_once(f"{job['job_id']}:result", _format_decision(result))
+        _remove_pending_job(job["job_id"])
+        st.rerun()
+    except Exception as exc:  # noqa: BLE001 - result fetch should not crash UI.
+        st.error(_safe_api_error(exc))
+
+
+def _render_pending_jobs() -> None:
+    jobs = _pending_jobs()
+    if not jobs:
+        return
+
+    st.markdown('<div class="section-kicker">Pending ORCA jobs</div>', unsafe_allow_html=True)
+    for job in list(jobs):
+        with st.container(border=True):
+            st.markdown(
+                f"**{job.get('symbol', 'N/A')}** · status `{job.get('status', 'unknown')}` · job `{job.get('job_id', 'N/A')}`"
+            )
+            st.caption(f"Prompt: {job.get('prompt', '')}")
+            st.caption(f"Created: {job.get('created_at', 'N/A')}")
+            if job.get("progress_stage") or job.get("progress_pct") is not None:
+                st.caption(f"Progress: {job.get('progress_stage') or 'N/A'} · {job.get('progress_pct', 'N/A')}%")
+
+            refresh_col, fetch_col, cancel_col = st.columns(3)
+            if refresh_col.button("Refresh status", key=f"refresh-{job['job_id']}", use_container_width=True):
+                _refresh_job_status(job)
+                st.rerun()
+            if fetch_col.button("Fetch result", key=f"fetch-{job['job_id']}", use_container_width=True):
+                _fetch_job_result(job)
+            cancel_col.button("Cancel", key=f"cancel-{job['job_id']}", disabled=True, use_container_width=True)
 
 st.markdown(
     """
@@ -308,6 +438,9 @@ with st.sidebar:
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "completed_orca_message_ids" not in st.session_state:
+    st.session_state.completed_orca_message_ids = set()
+_pending_jobs()
 
 symbol_list = [symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()]
 symbol_display = ", ".join(symbol_list) or "No symbols"
@@ -353,8 +486,10 @@ for col, (label, sample, detail) in zip(prompt_cols, sample_prompts):
     )
     if col.button(sample, use_container_width=True):
         st.session_state.messages.append({"role": "user", "content": sample})
-        with st.spinner("ORCA advisory job running..."):
-            st.session_state.messages.append({"role": "assistant", "content": _run_orca_flow(sample, primary_symbol, horizon, risk)})
+        with st.spinner("Submitting ORCA advisory job..."):
+            st.session_state.messages.append({"role": "assistant", "content": _submit_orca_job(sample, primary_symbol, horizon, risk)})
+
+_render_pending_jobs()
 
 st.markdown('<div class="section-kicker">Conversation tape</div>', unsafe_allow_html=True)
 
@@ -366,8 +501,8 @@ if user_prompt := st.chat_input("Ask ORCA about markets or stocks..."):
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
-    with st.spinner("ORCA advisory job running..."):
-        reply = _run_orca_flow(user_prompt, primary_symbol, horizon, risk)
+    with st.spinner("Submitting ORCA advisory job..."):
+        reply = _submit_orca_job(user_prompt, primary_symbol, horizon, risk)
     st.session_state.messages.append({"role": "assistant", "content": reply})
     with st.chat_message("assistant"):
         st.markdown(reply)
