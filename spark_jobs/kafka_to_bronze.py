@@ -198,7 +198,7 @@ def market_indicator_stream(spark: SparkSession):
             col("data.Volume").alias("Volume"),
             col("data.Dividends").alias("Dividends"),
             col("data").getField("Stock Splits").alias("Stock_Splits"),
-            col("data.Indicator").alias("Symbol"),
+            col("data.Indicator").alias("Indicator"),
             "kafka_topic",
             "kafka_partition",
             "kafka_offset",

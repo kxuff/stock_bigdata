@@ -174,7 +174,7 @@ def fetch_market_indicator(indicator: str) -> dict | None:
             .dt.strftime("%Y-%m-%dT%H:%M:%S%z")
         )
 
-        latest.drop(columns=[datetime_col], inplace=True)
+        # latest.drop(columns=[datetime_col], inplace=True)
         latest["Indicator"] = indicator
 
         return latest.to_dict(orient="records")[0]

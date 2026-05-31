@@ -83,23 +83,20 @@ def ensure_tables(spark: SparkSession) -> None:
     )
     spark.sql(
         f"""
-        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_news (
+        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_news_v2 (
             Datetime timestamp,
             Symbol string,
-            category string,
             headline string,
             source string,
-            summary string,
             url string,
             event_timestamp long,
-            news_text string,
-            has_image boolean,
+            image string,
             etl_load timestamp,
             process_date timestamp
         )
         USING iceberg
         PARTITIONED BY (days(Datetime), Symbol)
-        LOCATION 's3a://silver/stock_news'
+        LOCATION 's3a://silver/stock_news_v2'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
@@ -160,7 +157,7 @@ def market_indicator_silver_stream(spark: SparkSession):
             "etl_load",
         )
         .where(col("Datetime").isNotNull())
-        .where(col("Indicator").isNotNull() & (length(col("Symbol")) > 0))
+        .where(col("Indicator").isNotNull() & (length(col("Indicator")) > 0))
         .where(col("Close").isNotNull() & (col("Close") > 0))
         .where(col("High").isNotNull() & col("Low").isNotNull() & (col("High") >= col("Low")))
         .where(col("Volume").isNotNull() & (col("Volume") > 0))
@@ -273,15 +270,15 @@ if __name__ == "__main__":
                 "stock_market"
             ),
             write_iceberg_stream(
-                market_indicator_silver_stream,
+                market_indicator_silver_stream(spark),
                 f"{CATALOG}.silver.stock_market_indicator",
                 f"{CHECKPOINT_BASE}/stock_market_indicator",
                 "stock_market_indicator"
             ),
             write_iceberg_stream(
                 news_silver_stream(spark),
-                f"{CATALOG}.silver.stock_news",
-                f"{CHECKPOINT_BASE}/stock_news",
+                f"{CATALOG}.silver.stock_news_v2",
+                f"{CHECKPOINT_BASE}/stock_news_v2",
                 "stock_news"
             ),
         ])
