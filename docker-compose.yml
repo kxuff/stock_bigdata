@@ -388,6 +388,7 @@ services:
       ORCA_SENTIMENT_TABLE: ml_ready.stock_sentiment_context
       ORCA_VALUATION_TABLE: ml_ready.stock_valuation_context
       ORCA_CONTEXT_MAX_AGE_SECONDS: "86400"
+      ORCA_DECISION_JOB_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/stock_db
       CREWAI_TRACING_ENABLED: "false"
       CREWAI_VERBOSE: "true"
     ports:
@@ -395,6 +396,7 @@ services:
     depends_on:
       - spark-master
       - spark-worker
+      - postgres
       - nessie
       - minio
     extra_hosts:
