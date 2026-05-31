@@ -301,7 +301,13 @@ def merge_pandas_to_iceberg(
     try:
         df = spark.read.parquet(staging_path)
         
-        if table_name == config.curated_price_table:
+        if table_name == config.ml_ready_prediction_table:
+            df.write.format("jdbc") \
+                .options(**POSTGRES_OPTIONS) \
+                .option("dbtable", "stock_inference") \
+                .mode("append") \
+                .save()
+        elif table_name == config.curated_price_table:
             df.write.format("jdbc") \
                 .options(**POSTGRES_OPTIONS) \
                 .option("db_table", "stock_eod") \

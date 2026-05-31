@@ -30,7 +30,7 @@ ICEBERG_CATALOG = os.getenv("ICEBERG_CATALOG", "nessie")
 RAW_PRICE_TABLE_NAME = os.getenv("US_STOCK_RAW_PRICE_TABLE", "raw.us_stock_eod_prices")
 CURATED_PRICE_TABLE_NAME = os.getenv("US_STOCK_CURATED_PRICE_TABLE", "curated.us_stock_eod_prices")
 ML_READY_FEATURE_TABLE_NAME = os.getenv("US_STOCK_ML_READY_FEATURE_TABLE", "ml_ready.stock_price_features")
-ML_READY_PREDICTION_TABLE_NAME = os.getenv("US_STOCK_ML_READY_PREDICTION_TABLE", "ml_ready.stock_predictions")
+ML_READY_PREDICTION_TABLE_NAME = os.getenv("US_STOCK_ML_READY_PREDICTION_TABLE", "ml_ready.stock_predictions_v2")
 ML_READY_SENTIMENT_TABLE_NAME = os.getenv("US_STOCK_ML_READY_SENTIMENT_TABLE", "ml_ready.stock_sentiment_context")
 ML_READY_VALUATION_TABLE_NAME = os.getenv("US_STOCK_ML_READY_VALUATION_TABLE", "ml_ready.stock_valuation_context")
 
@@ -42,7 +42,7 @@ ML_READY_FEATURE_TABLE_LOCATION = os.getenv(
 )
 ML_READY_PREDICTION_TABLE_LOCATION = os.getenv(
     "US_STOCK_ML_READY_PREDICTION_LOCATION",
-    "s3a://prediction/ml_ready/stock_predictions",
+    "s3a://prediction/ml_ready/stock_predictions_v2",
 )
 ML_READY_SENTIMENT_TABLE_LOCATION = os.getenv(
     "US_STOCK_ML_READY_SENTIMENT_LOCATION",
