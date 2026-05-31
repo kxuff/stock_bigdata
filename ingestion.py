@@ -3,6 +3,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+import pandas as pd
 import pytz
 import requests
 import yfinance as yf
@@ -18,6 +19,7 @@ load_dotenv()
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
 MARKET_TOPIC = os.getenv("MARKET_TOPIC", "stock_market")
+MARKET_INDICATOR_TOPIC = os.getenv("MARKET_INDICATOR_TOPIC", "stock_market_indicator")
 NEWS_TOPIC = os.getenv("NEWS_TOPIC", "stock_news")
 FINNHUB_API_KEY = os.getenv("API_KEY")
 
@@ -33,6 +35,22 @@ SYMBOLS = [
     "MMM", "XOM", "CVX", "PFE", "JNJ",
     "MRK", "ABBV", "T", "F", "GM",
 ]
+
+MARKET_INDICATORS = {
+    "sp500": "^GSPC",
+    "dow": "^DJI",
+    "nasdaq": "^IXIC",
+    "russell2000": "^RUT",
+    "vix": "^VIX",
+    "dxy": "DX-Y.NYB",
+    "us10y": "^TNX",
+    "us5y": "^FVX",
+    "us3m": "^IRX",
+    "oil_wti": "CL=F",
+    "gold": "GC=F",
+    "bitcoin": "BTC-USD",
+    "sox": "^SOX",
+}
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
@@ -69,7 +87,7 @@ def fetch_market_data(symbol: str) -> dict | None:
             logger.debug(f"No market data available for {symbol}")
             return None
 
-        latest = data.iloc[-2:0-1]  # Get the most recent complete minute data (exclude the last row which may be incomplete)
+        latest = data.iloc[-2:-1]  # Get the most recent complete minute data (exclude the last row which may be incomplete)
         if latest.empty:
             return None
 
@@ -95,6 +113,78 @@ def fetch_market_data(symbol: str) -> dict | None:
         logger.error(f"Error fetching market data for {symbol}: {e}")
         return None
 
+def fetch_market_indicator(indicator: str) -> dict | None:
+    try:
+        stock = yf.Ticker(indicator)
+
+        eastern = pytz.timezone("America/New_York")
+        today_eastern = datetime.now(eastern).date()
+
+        start_time = eastern.localize(
+            datetime.combine(
+                today_eastern,
+                datetime.min.time().replace(hour=9, minute=30)
+            )
+        )
+
+        end_time = eastern.localize(
+            datetime.combine(
+                today_eastern,
+                datetime.min.time().replace(hour=16, minute=0)
+            )
+        )
+
+        data = stock.history(
+            start=start_time,
+            end=end_time,
+            interval="1m"
+        )
+
+        if data.empty:
+            print(
+                f"No intraday data for {indicator}, "
+                f"fetching latest available data"
+            )
+
+            data = stock.history(
+                period="5d",
+                interval="1m"
+            )
+
+        if data.empty:
+            print(
+                f"No market indicator data for {indicator}"
+            )
+            return None
+
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+            
+        # lấy cây nến hoàn chỉnh gần nhất
+        latest = data.iloc[-2:-1]
+
+        if latest.empty:
+            return None
+
+        latest = latest.reset_index()
+        datetime_col = latest.columns[0]
+        
+        latest["Datetime"] = (
+            pd.to_datetime(latest[datetime_col])
+            .dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+        )
+
+        latest.drop(columns=[datetime_col], inplace=True)
+        latest["Indicator"] = indicator
+
+        return latest.to_dict(orient="records")[0]
+
+    except Exception as e:
+        print(
+            f"Error fetching market indicator "
+            f"for {indicator}: {e}"
+        )
+        return None
 
 def fetch_news(symbol: str, from_date: str, to_date: str) -> list[dict]:
     if not FINNHUB_API_KEY:
@@ -146,7 +236,26 @@ def produce_market_data() -> None:
         except Exception as exc:
             logger.error(f"Failed market data for {symbol}: {exc}")
 
+def produce_market_indicator() -> None:
+    for indicator in MARKET_INDICATORS.values():
+        try:
+            record = fetch_market_indicator(indicator)
 
+            if not record:
+                logger.debug(f"No market data for {indicator}")
+                continue
+            producer.send(
+                MARKET_INDICATOR_TOPIC,
+                key=record.get("Indicator"),
+                value=record
+            )
+            logger.info(
+                f"Sent market indicator record for {indicator}"
+            )
+            
+        except Exception as exc:
+            logger.error(f"Failed market indicator data for {indicator}: {exc}")
+                
 def produce_news() -> None:
     today = datetime.now(timezone.utc).date()
     from_date = os.getenv("NEWS_FROM_DATE", (today - timedelta(days=1)).isoformat())
@@ -179,6 +288,7 @@ def run_ingestion() -> None:
         now = datetime.now(timezone.utc)
         if (now - stock_last_run).total_seconds() >= interval_seconds_stock:
             produce_market_data()
+            produce_market_indicator()
             stock_last_run = now
         if (now - news_last_run).total_seconds() >= interval_seconds_news:
             produce_news()

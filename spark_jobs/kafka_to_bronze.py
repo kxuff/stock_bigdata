@@ -30,6 +30,20 @@ MARKET_SCHEMA = StructType(
     ]
 )
 
+MARKET_INDICATOR_SCHEMA = StructType(
+    [
+        StructField("Open", DoubleType()),
+        StructField("High", DoubleType()),
+        StructField("Low", DoubleType()),
+        StructField("Close", DoubleType()),
+        StructField("Volume", LongType()),
+        StructField("Dividends", DoubleType()),
+        StructField("Stock Splits", DoubleType()),
+        StructField("Datetime", StringType()),
+        StructField("Indicator", StringType()),
+    ]
+)
+
 NEWS_SCHEMA = StructType(
     [
         StructField("category", StringType()),
@@ -82,6 +96,31 @@ def ensure_tables(spark: SparkSession) -> None:
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
+    
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {CATALOG}.bronze.stock_market_indicator (
+            Datetime timestamp,
+            Open double,
+            High double,
+            Low double,
+            Close double,
+            Volume long,
+            Dividends double,
+            Stock_Splits double,
+            Indicator string,
+            kafka_topic string,
+            kafka_partition int,
+            kafka_offset long,
+            etl_load timestamp
+        )
+        USING iceberg
+        PARTITIONED BY (days(Datetime))
+        LOCATION 's3a://bronze/stock_market_indicator'
+        TBLPROPERTIES ('write.format.default'='parquet')
+        """
+    )
+    
     spark.sql(
         f"""
         CREATE TABLE IF NOT EXISTS {CATALOG}.bronze.stock_news (
@@ -146,7 +185,27 @@ def market_stream(spark: SparkSession):
         )
     )
 
-
+def market_indicator_stream(spark: SparkSession):
+    return (
+        read_kafka_topic(spark, "stock_market_indicator")
+        .select("*", from_json(col("payload"), MARKET_INDICATOR_SCHEMA).alias("data"))
+        .select(
+            to_timestamp(col("data.Datetime")).alias("Datetime"),
+            col("data.Open").alias("Open"),
+            col("data.High").alias("High"),
+            col("data.Low").alias("Low"),
+            col("data.Close").alias("Close"),
+            col("data.Volume").alias("Volume"),
+            col("data.Dividends").alias("Dividends"),
+            col("data").getField("Stock Splits").alias("Stock_Splits"),
+            col("data.Indicator").alias("Symbol"),
+            "kafka_topic",
+            "kafka_partition",
+            "kafka_offset",
+            current_timestamp().alias("etl_load"),
+        )
+    )
+    
 def news_stream(spark: SparkSession):
     source = read_kafka_topic(spark, "stock_news")
     array_records = (
@@ -199,8 +258,7 @@ def write_iceberg_stream(df, table_name: str, checkpoint: str):
         .outputMode("append")
         .start()
     )
-
-
+    
 if __name__ == "__main__":
     spark = None
     queries = []
@@ -236,6 +294,11 @@ if __name__ == "__main__":
                 market_stream(spark),
                 f"{CATALOG}.bronze.stock_market",
                 f"{CHECKPOINT_BASE}/stock_market",
+            ),
+            write_iceberg_stream(
+                market_indicator_stream(spark),
+                f"{CATALOG}.bronze.stock_market_indicator",
+                f"{CHECKPOINT_BASE}/stock_market_indicator",
             ),
             write_iceberg_stream(
                 news_stream(spark),

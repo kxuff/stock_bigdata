@@ -15,7 +15,12 @@ from pyspark.sql.functions import (
 
 CATALOG = "nessie"
 CHECKPOINT_BASE = "s3a://silver/checkpoints/bronze_to_silver"
-
+POSTGRES_PROPS = {
+        "url": "jdbc:postgresql://postgres:5432/stock_db", 
+        "driver": "org.postgresql.Driver",
+        "user": "postgres",
+        "password": "postgres"
+    }
 
 def build_spark() -> SparkSession:
     return (
@@ -50,6 +55,29 @@ def ensure_tables(spark: SparkSession) -> None:
         USING iceberg
         PARTITIONED BY (days(Datetime), Symbol)
         LOCATION 's3a://silver/stock_market'
+        TBLPROPERTIES ('write.format.default'='parquet')
+        """
+    )
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_market_indicator (
+            Datetime timestamp,
+            Indicator string,
+            Open double,
+            High double,
+            Low double,
+            Close double,
+            Volume long,
+            Dividends double,
+            Stock_Splits double,
+            daily_range double,
+            close_position double,
+            etl_load timestamp,
+            process_date timestamp
+        )
+        USING iceberg
+        PARTITIONED BY (days(Datetime), Indicator)
+        LOCATION 's3a://silver/stock_market_indicator'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
@@ -116,7 +144,45 @@ def market_silver_stream(spark: SparkSession):
         current_timestamp().alias("process_date"),
     )
 
-
+def market_indicator_silver_stream(spark: SparkSession):
+    bronze = spark.readStream.format("iceberg").load(f"{CATALOG}.bronze.stock_market_indicator")
+    clean = (
+        bronze.select(
+            "Datetime",
+            trim(col("Indicator")).alias("Indicator"),
+            col("Open").cast("double").alias("Open"),
+            col("High").cast("double").alias("High"),
+            col("Low").cast("double").alias("Low"),
+            col("Close").cast("double").alias("Close"),
+            col("Volume").cast("long").alias("Volume"),
+            col("Dividends").cast("double").alias("Dividends"),
+            col("Stock_Splits").cast("double").alias("Stock_Splits"),
+            "etl_load",
+        )
+        .where(col("Datetime").isNotNull())
+        .where(col("Indicator").isNotNull() & (length(col("Symbol")) > 0))
+        .where(col("Close").isNotNull() & (col("Close") > 0))
+        .where(col("High").isNotNull() & col("Low").isNotNull() & (col("High") >= col("Low")))
+        .where(col("Volume").isNotNull() & (col("Volume") > 0))
+    )
+    return clean.select(
+        "Datetime",
+        "Indicator",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+        "Dividends",
+        "Stock_Splits",
+        (col("High") - col("Low")).alias("daily_range"),
+        when((col("High") - col("Low")) > 0, (col("Close") - col("Low")) / (col("High") - col("Low")))
+        .otherwise(None)
+        .alias("close_position"),
+        "etl_load",
+        current_timestamp().alias("process_date"),
+    )
+    
 def news_silver_stream(spark: SparkSession):
     bronze = spark.readStream.format("iceberg").load(f"{CATALOG}.bronze.stock_news")
     clean = (
@@ -140,26 +206,24 @@ def news_silver_stream(spark: SparkSession):
     return clean.select(
         "Datetime",
         "Symbol",
-        "category",
         "headline",
         "source",
-        "summary",
         "url",
         "event_timestamp",
-        regexp_replace(trim(concat_ws(" ", col("headline"), col("summary"))), r"\s+", " ").alias("news_text"),
-        (col("image").isNotNull() & (length(col("image")) > 0)).alias("has_image"),
+        "image",
         "etl_load",
         current_timestamp().alias("process_date"),
     )
 
 
-def write_iceberg_stream(df, table_name: str, checkpoint: str, jdbc_options: dict | None = None):
+def write_iceberg_stream(df, table_name: str, checkpoint: str, db_table: str = None):
     def append_batch(batch_df, _batch_id):
         batch_df.writeTo(table_name).append()
         
-        if jdbc_options:
+        if db_table:
             batch_df.write.format("jdbc") \
-                .options(**jdbc_options) \
+                .options(**POSTGRES_PROPS) \
+                .option("dbtable", db_table) \
                 .mode("append") \
                 .save()
     return (
@@ -197,14 +261,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
     
-    POSTGRES_OPTIONS = {
-        "url": "jdbc:postgresql://postgres:5432/stock_db", 
-        "driver": "org.postgresql.Driver",
-        "dbtable": "stock_market", 
-        "user": "postgres",
-        "password": "postgres"
-    }
-    
     try: 
         spark = build_spark()
         ensure_tables(spark)
@@ -214,12 +270,19 @@ if __name__ == "__main__":
                 market_silver_stream(spark),
                 f"{CATALOG}.silver.stock_market",
                 f"{CHECKPOINT_BASE}/stock_market",
-                POSTGRES_OPTIONS
+                "stock_market"
+            ),
+            write_iceberg_stream(
+                market_indicator_silver_stream,
+                f"{CATALOG}.silver.stock_market_indicator",
+                f"{CHECKPOINT_BASE}/stock_market_indicator",
+                "stock_market_indicator"
             ),
             write_iceberg_stream(
                 news_silver_stream(spark),
                 f"{CATALOG}.silver.stock_news",
                 f"{CHECKPOINT_BASE}/stock_news",
+                "stock_news"
             ),
         ])
         while not stop_requested:

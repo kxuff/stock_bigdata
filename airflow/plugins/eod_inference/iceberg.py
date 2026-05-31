@@ -267,7 +267,6 @@ def max_dates_by_symbol(spark: SparkSession, table_name: str) -> dict[str, date]
 POSTGRES_OPTIONS = {
         "url": "jdbc:postgresql://postgres:5432/stock_db", 
         "driver": "org.postgresql.Driver",
-        "dbtable": "stock_inference", 
         "user": "postgres",
         "password": "postgres"
     }
@@ -289,6 +288,13 @@ def merge_pandas_to_iceberg(
         if table_name == config.ml_ready_prediction_table:
             df.write.format("jdbc") \
                 .options(**POSTGRES_OPTIONS) \
+                .option("dbtable", "stock_inference") \
+                .mode("append") \
+                .save()
+        elif table_name == config.curated_price_table:
+            df.write.format("jdbc") \
+                .options(**POSTGRES_OPTIONS) \
+                .option("db_table", "stock_eod") \
                 .mode("append") \
                 .save()
                 
