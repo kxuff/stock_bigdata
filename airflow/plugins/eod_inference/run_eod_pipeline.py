@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
 from typing import Any
+
+for plugin_path in [Path("/opt/airflow/plugins"), Path(__file__).resolve().parents[1]]:
+    if plugin_path.exists() and str(plugin_path) not in sys.path:
+        sys.path.insert(0, str(plugin_path))
 
 from eod_inference.pipeline import (
     clean_validate_prices,

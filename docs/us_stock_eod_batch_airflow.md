@@ -15,6 +15,28 @@ Backfill is controlled manually with the Airflow Variable `US_STOCK_INITIAL_LOAD
 - Set `US_STOCK_INITIAL_LOAD=true` to download `US_STOCK_BACKFILL_CALENDAR_DAYS` calendar days for every symbol and upsert those rows into raw Iceberg.
 - Set `US_STOCK_INITIAL_LOAD=false` for the normal incremental path. The extractor reads the max `Datetime` already present in the raw table per symbol and downloads only later bars. If a symbol has no raw history and initial load is false, it only requests the DAG run date, so history validation can fail until you run a backfill.
 
+## Streamlit AI Stock Picks contract
+
+`run_ml_inference()` writes `predictions.parquet` under the EOD staging directory. The Streamlit AI Stock Picks page reads the latest batch locally, or from `ML_INFERENCE_PICKS_URL` when an external endpoint is configured, and displays this normalized contract:
+
+| Column | Meaning |
+| --- | --- |
+| `Date` | Ngày phát sinh tín hiệu mua. |
+| `Ticker` | Mã cổ phiếu. |
+| `Entry_Price` | Giá mua đề xuất tại thời điểm tín hiệu, sourced from `Close` in the feature batch. |
+| `Pred_A` | Mức tăng giá dự báo bởi mô hình, dạng thập phân. Ví dụ `0.0885` tương ứng dự báo tăng `8.85%`. |
+| `Risk_Prob_%` | Chỉ số rủi ro dự báo của mô hình, hiển thị theo phần trăm. |
+| `FinalScore` | Điểm xếp hạng cuối cùng, computed as `Pred_A * (1 - RiskProb)` when risk is available. |
+
+Local Streamlit config options:
+
+| Env var | Purpose |
+| --- | --- |
+| `ML_INFERENCE_PICKS_URL` | Optional HTTP endpoint returning a JSON list, or `{ "data": [...] }`, with the contract above. |
+| `ML_INFERENCE_PREDICTIONS_PATH` | Optional direct path to `predictions.parquet`. |
+| `ML_INFERENCE_MANIFEST_PATH` | Optional direct path to `inference_manifest.json`. |
+| `US_STOCK_EOD_DATA_DIR` | EOD batch data directory used to discover the latest `staging/*/inference_manifest.json`. |
+
 If the DAG runs on a US market holiday and yfinance returns no new daily bar, the feature task raises an Airflow skip so stale rows are not re-scored.
 
 Important Airflow Variables:

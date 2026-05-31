@@ -15,6 +15,13 @@ from eod_inference.utils import parse_date, read_parquet, stage_dir, write_json
 
 
 def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
+    """Score the feature batch and write the Streamlit stock-pick contract.
+
+    The returned manifest points to `prediction_batch`, a parquet file with
+    Datetime/Symbol plus entry_price, pred_a, risk_prob, and final_score.
+    Streamlit normalizes these fields to Date, Ticker, Entry_Price, Pred_A,
+    Risk_Prob_%, and FinalScore for the AI Stock Picks page.
+    """
     config = PipelineConfig.from_env()
     target_date = parse_date(feature_manifest["as_of_date"])
     feature_manifest = _with_agent_context(feature_manifest, target_date.isoformat())
@@ -30,13 +37,14 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
 
     x = features[list(PRICE_FEATURE_COLUMNS)].astype(float)
     pred_a = np.asarray(model_a["model"].predict(x), dtype=float)
-    _validate_probability_output(pred_a, "Model A")
+    _validate_upside_output(pred_a, "Model A")
     risk_prob = _predict_risk(model_c, x)
     if risk_prob is None:
         risk_prob = np.full(shape=len(pred_a), fill_value=np.nan, dtype=float)
 
     output = features[["Datetime", "Symbol"]].copy()
     output["model_version"] = _model_version(model_a, model_c)
+    output["entry_price"] = pd.to_numeric(features["Close"], errors="coerce")
     output["pred_a"] = pred_a
     output["risk_prob"] = risk_prob
     output["final_score"] = np.where(np.isnan(risk_prob), pred_a, pred_a * (1 - risk_prob))
@@ -125,6 +133,11 @@ def _validate_probability_output(values: np.ndarray, name: str) -> None:
         raise PipelineValidationError(f"{name} must output calibrated probabilities in [0, 1].")
 
 
+def _validate_upside_output(values: np.ndarray, name: str) -> None:
+    if not np.isfinite(values).all():
+        raise PipelineValidationError(f"{name} must output finite decimal returns.")
+
+
 def _model_version(model_a: dict[str, Any], model_c: dict[str, Any] | None) -> str:
     version_a = str(model_a.get("model_version") or Path(model_a["path"]).stem)
     if model_c is None:
@@ -141,6 +154,8 @@ def _optional_manifest_path(manifest: dict[str, Any], key: str) -> Path | None:
 
 
 def _with_agent_context(manifest: dict[str, Any], as_of_date: str) -> dict[str, Any]:
+    if manifest.get("skip_agent_context"):
+        return manifest
     if manifest.get("sentiment_context") and manifest.get("valuation_context"):
         return manifest
 

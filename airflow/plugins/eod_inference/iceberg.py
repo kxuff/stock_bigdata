@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import uuid
@@ -27,6 +28,8 @@ from eod_inference.config import MARKET_CONTEXT_SYMBOL, PipelineConfig
 from eod_inference.exceptions import PipelineValidationError
 from eod_inference.feature_contract import PRICE_FEATURE_COLUMNS
 
+
+logger = logging.getLogger(__name__)
 
 PANDAS_STAGING_BASE = os.getenv("US_STOCK_PANDAS_STAGING_BASE", "s3a://bronze/tmp/eod_inference/pandas")
 
@@ -194,6 +197,7 @@ def ensure_iceberg_tables(spark: SparkSession, config: PipelineConfig) -> None:
             Datetime timestamp,
             Symbol string,
             model_version string,
+            entry_price double,
             pred_a double,
             risk_prob double,
             final_score double,
@@ -206,6 +210,11 @@ def ensure_iceberg_tables(spark: SparkSession, config: PipelineConfig) -> None:
         LOCATION '{config.ml_ready_prediction_location}'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
+    )
+    _ensure_table_columns(
+        spark,
+        config.ml_ready_prediction_table,
+        {"entry_price": "double"},
     )
     spark.sql(
         f"""
@@ -254,6 +263,13 @@ def ensure_iceberg_tables(spark: SparkSession, config: PipelineConfig) -> None:
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
+
+
+def _ensure_table_columns(spark: SparkSession, table_name: str, columns: dict[str, str]) -> None:
+    existing_columns = set(spark_table(spark, table_name).columns)
+    for column_name, column_type in columns.items():
+        if column_name not in existing_columns:
+            spark.sql(f"ALTER TABLE {table_ref(table_name)} ADD COLUMN {column_name} {column_type}")
 
 
 def max_dates_by_symbol(spark: SparkSession, table_name: str) -> dict[str, date]:
@@ -439,11 +455,15 @@ def validate_price_history(
     counts = {row.Symbol: int(row.history_days) for row in history.collect()}
     missing_symbols = sorted(set(needed_symbols) - set(counts))
     if missing_symbols:
-        raise PipelineValidationError(f"Missing symbols after cleaning: {missing_symbols}")
+        logger.warning("Skipping symbols with no cleaned history: %s", missing_symbols)
+
+    present_symbols = [symbol for symbol in needed_symbols if symbol in counts]
+    if not present_symbols:
+        raise PipelineValidationError("No symbol history is available after cleaning.")
 
     short_history = {
         symbol: counts[symbol]
-        for symbol in needed_symbols
+        for symbol in present_symbols
         if counts.get(symbol, 0) < min_lookback_days
     }
     if short_history:

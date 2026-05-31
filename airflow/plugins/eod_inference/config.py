@@ -6,16 +6,18 @@ from pathlib import Path
 
 
 DEFAULT_SYMBOLS = [
-    "AAPL", "ABBV", "ADBE", "AMD", "AMZN",
-    "BA", "BAC", "C", "CAT", "CRM",
-    "CSCO", "CVX", "DIS", "F", "GE",
-    "GM", "GOOGL", "GS", "IBM", "INTC",
-    "JNJ", "JPM", "KO", "LYFT", "MA",
-    "MCD", "META", "MMM", "MRK", "MSFT",
-    "NFLX", "NKE", "NUE", "NVDA", "ORCL",
-    "PEP", "PFE", "PLTR", "PYPL", "SHOP",
-    "SNAP", "SPOT", "T", "TSLA", "UBER",
-    "V", "WFC", "WMT", "XOM", "ZM",
+    "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AGN", "AIG", "ALL", "AMD", "AMGN",
+    "AMZN", "AXP", "BA", "BAC", "BIIB", "BK", "BLK", "BMY", "BRK.B", "C",
+    "CAT", "CELG", "CL", "CMCSA", "COF", "COP", "COST", "CRM", "CSCO", "CVS",
+    "CVX", "DD", "DHR", "DIS", "DOW", "DUK", "EMR", "EXC", "F", "FB",
+    "FDX", "FOX", "FOXA", "GD", "GE", "GILD", "GM", "GOOG", "GOOGL", "GS",
+    "HAL", "HD", "HON", "IBM", "INTC", "JNJ", "JPM", "KHC", "KMI", "KO",
+    "LLY", "LMT", "LOW", "LYFT", "MA", "MCD", "MDLZ", "MDT", "MET", "META",
+    "MMM", "MO", "MON", "MRK", "MS", "MSFT", "NEE", "NFLX", "NKE", "NUE",
+    "NVDA", "ORCL", "OXY", "PCLN", "PEP", "PFE", "PG", "PLTR", "PM", "PYPL",
+    "QCOM", "RTN", "SBUX", "SHOP", "SLB", "SNAP", "SO", "SPG", "SPOT", "T",
+    "TGT", "TSLA", "TWX", "TXN", "UBER", "UNH", "UNP", "UPS", "USB", "UTX",
+    "V", "VZ", "WBA", "WFC", "WMT", "XOM", "ZM"
 ]
 
 MARKET_CONTEXT_SYMBOL = "SPY"
@@ -50,6 +52,19 @@ ML_READY_VALUATION_TABLE_LOCATION = os.getenv(
     "US_STOCK_ML_READY_VALUATION_LOCATION",
     "s3a://prediction/ml_ready/stock_valuation_context",
 )
+
+LEGACY_SYMBOL_ALIASES = {
+    "AGN": "ABBV",
+    "BRK.B": "BRK-B",
+    "CELG": "BMY",
+    "FB": "META",
+    "MON": None,
+    "PCLN": "BKNG",
+    "RTN": "RTX",
+    "TWX": None,
+    "UTX": "RTX",
+    "WBA": None,
+}
 
 
 @dataclass(frozen=True)
@@ -128,7 +143,15 @@ class PipelineConfig:
 def _parse_symbols(value: str | None) -> list[str]:
     if not value:
         return DEFAULT_SYMBOLS.copy()
-    symbols = [item.strip().upper() for item in value.split(",") if item.strip()]
+    symbols: list[str] = []
+    for item in value.split(","):
+        raw = item.strip().upper()
+        if not raw:
+            continue
+        normalized = LEGACY_SYMBOL_ALIASES.get(raw, raw)
+        if normalized is None:
+            continue
+        symbols.append(normalized)
     return sorted(set(symbols))
 
 

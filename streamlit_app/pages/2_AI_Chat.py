@@ -27,7 +27,7 @@ sample_prompts = [
     "Show risks in current picks",
 ]
 for col, sample in zip(prompt_cols, sample_prompts):
-    if col.button(sample, use_container_width=True):
+    if col.button(sample, width="stretch"):
         st.session_state.messages.append({"role": "user", "content": sample})
         st.session_state.messages.append({"role": "assistant", "content": f"Mock view for {symbols}: {sample}. Horizon {horizon}, risk {risk}. Signals favor quality growth with controlled position sizing."})
 

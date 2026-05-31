@@ -1,4 +1,10 @@
 streamlit
 pandas
+pyarrow
 plotly
 requests
+matplotlib
+yfinance
+joblib
+xgboost
+scikit-learn

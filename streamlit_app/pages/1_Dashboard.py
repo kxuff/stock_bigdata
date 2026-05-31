@@ -23,7 +23,7 @@ left, right = st.columns([2, 1])
 with left:
     fig = px.line(TREND_DATA, x="date", y=["AI confidence", "Market breadth"], markers=True, template="plotly_dark")
     fig.update_layout(legend_title_text="", margin=dict(l=10, r=10, t=20, b=10))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 with right:
     st.markdown("<div class='brief'><span class='pill'>Today's brief</span>", unsafe_allow_html=True)
     for item in TODAYS_BRIEF:
@@ -31,4 +31,4 @@ with right:
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.subheader("Recent AI Decisions")
-st.dataframe(RECENT_DECISIONS, use_container_width=True, hide_index=True)
+st.dataframe(RECENT_DECISIONS, width="stretch", hide_index=True)

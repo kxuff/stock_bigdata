@@ -252,9 +252,10 @@ def _build_one_symbol_features(
 
     df["CLV"] = _safe_div(close - low, high - low) - 0.5
 
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    ema50 = close.ewm(span=50, adjust=False).mean()
-    ema200 = close.ewm(span=200, adjust=False).mean()
+    # Match the training notebook, which used the pandas default `adjust=True`.
+    ema20 = close.ewm(span=20).mean()
+    ema50 = close.ewm(span=50).mean()
+    ema200 = close.ewm(span=200).mean()
     close_safe = close.replace(0, np.nan)
     df["EMA20_50_spread"] = (ema20 - ema50) / close_safe
     df["EMA50_200_spread"] = (ema50 - ema200) / close_safe
@@ -300,7 +301,7 @@ def _build_one_symbol_features(
     df["RS_vs_SPY_14"] = rel_strength.pct_change(14)
     df["RS_vs_SPY_30"] = rel_strength.pct_change(30)
     df["beta_60D"] = returns.rolling(60).cov(spy_returns) / spy_returns.rolling(60).var().replace(0, np.nan)
-    df["SPY_above_EMA50"] = (spy_close > spy_close.ewm(span=50, adjust=False).mean()).astype(int)
+    df["SPY_above_EMA50"] = (spy_close > spy_close.ewm(span=50).mean()).astype(int)
     df["SPY_20d_return"] = spy_close.pct_change(20)
     df["sector_percentile_20d"] = 0.5
 

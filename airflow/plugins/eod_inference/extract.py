@@ -110,13 +110,14 @@ def _download_symbols(requests: list[tuple[str, date, date]]) -> list[pd.DataFra
 def _download_symbol(symbol: str, start: date, end: date) -> pd.DataFrame:
     logger.info(f"Downloading {symbol} from {start} to {end}")
 
-    # 2. Download dữ liệu (Để yfinance tự lo khoản chống block, KHÔNG truyền session)
+    # Match the training notebook: adjusted OHLCV produces the same return/EMA
+    # feature scale that the exported model artifacts were trained on.
     frame = yf.download(
         symbol,
         start=start.isoformat(),
         end=end.isoformat(),
         interval="1d",
-        auto_adjust=False,
+        auto_adjust=True,
         actions=True,
         progress=False,
         threads=False,
