@@ -367,11 +367,12 @@ services:
       context: ./orca-agent-advisory
       dockerfile: Dockerfile
     container_name: orca-api
+    env_file:
+      - ./orca-agent-advisory/.env
     environment:
       LLM_PROVIDER: litellm
       LLM_MODEL: openai/oc/deepseek-v4-flash-free
       LLM_BASE_URL: http://host.docker.internal:20128/v1
-      LLM_API_KEY: ${NINEROUTER_KEY:-dummy}
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
       ORCA_SPARK_MASTER: local[2]

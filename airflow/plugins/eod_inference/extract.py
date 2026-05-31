@@ -43,9 +43,8 @@ def extract_eod_prices(as_of_date: str) -> dict[str, Any]:
     download_requests: list[tuple[str, date, date]] = []
     for symbol in needed_symbols:
         if config.initial_load:
-            # start = target_date - timedelta(days=config.backfill_calendar_days)
-            start = date(2025, 1, 1)
-            end = date(2026, 5, 26)
+            start = target_date - timedelta(days=config.backfill_calendar_days)
+            end = target_date + timedelta(days=1)
             mode_by_symbol[symbol] = "backfill"
             download_requests.append((symbol, start, end))
         else:

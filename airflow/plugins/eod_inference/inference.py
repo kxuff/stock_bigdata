@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pickle
 from pathlib import Path
+import os
 from typing import Any
 
 import numpy as np
@@ -157,6 +158,8 @@ def _with_agent_context(manifest: dict[str, Any], as_of_date: str) -> dict[str, 
     if manifest.get("skip_agent_context"):
         return manifest
     if manifest.get("sentiment_context") and manifest.get("valuation_context"):
+        return manifest
+    if not os.getenv("FINBERT_API_URL", "").strip():
         return manifest
 
     from eod_inference.agent_context import build_agent_context

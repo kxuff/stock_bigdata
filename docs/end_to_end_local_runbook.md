@@ -153,7 +153,7 @@ curl -X POST http://localhost:8000/api/v1/advisory/decision \
   --data @samples/normal_request.json
 ```
 
-Set `ORCA_TOOL_RESULT_PROVIDER=bigdata` to read Spark/Iceberg data, or `ORCA_TOOL_RESULT_PROVIDER=sample` for sample tool-result fixtures. Deterministic upstream CLI removed; runtime advisory path must use ORCA agent service.
+Set `ORCA_TOOL_RESULT_PROVIDER=bigdata` to read Spark/Iceberg data. Production runtime supports only bigdata provider; sample tool-result fixtures remain contract fixtures only. Deterministic upstream CLI removed; runtime advisory path must use ORCA agent service.
 
 Full upstream layer env:
 
