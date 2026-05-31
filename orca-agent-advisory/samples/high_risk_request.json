@@ -1,0 +1,23 @@
+{
+  "request_id": "req_20260513_002",
+  "timestamp": "2026-05-13T15:45:00Z",
+  "as_of_timestamp": "2026-05-13T15:45:00Z",
+  "user_query": "Should I buy TSLA today?",
+  "decision_mode": "single_symbol_advisory",
+  "symbols": ["TSLA"],
+  "user_context": {
+    "risk_tolerance": "CONSERVATIVE",
+    "investment_horizon": "SHORT_TERM",
+    "target_sectors": ["Consumer Discretionary"],
+    "excluded_symbols": [],
+    "max_single_asset_weight": 25,
+    "allow_cash_position": true,
+    "custom_constraints": {
+      "avoid_high_volatility": true
+    }
+  },
+  "metadata": {
+    "client": "web",
+    "locale": "en-US"
+  }
+}

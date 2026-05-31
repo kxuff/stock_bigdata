@@ -1,0 +1,76 @@
+{
+  "request_id": "req_20260513_010",
+  "run_id": "run_20260513_010",
+  "decision_mode": "portfolio_recommendation",
+  "risk_profile": "MODERATE",
+  "portfolio_allocation": [
+    {
+      "symbol": "AAPL",
+      "weight_pct": 35,
+      "portfolio_action": "DECREASE_WEIGHT",
+      "rationale": "Reduce concentration while keeping exposure to a stable core holding."
+    },
+    {
+      "symbol": "MSFT",
+      "weight_pct": 35,
+      "portfolio_action": "MAINTAIN_WEIGHT",
+      "rationale": "Maintain exposure due to lower relative risk and stable technical profile."
+    },
+    {
+      "symbol": "CASH",
+      "weight_pct": 30,
+      "portfolio_action": "CASH_BUFFER",
+      "rationale": "Cash buffer reduces volatility and satisfies the user constraint."
+    }
+  ],
+  "portfolio_summary": {
+    "expected_risk_label": "MEDIUM",
+    "concentration_risk": "LOW",
+    "dominant_themes": ["Technology exposure", "Cash buffer"]
+  },
+  "reasoning_trace": ["AAPL weight is reduced below max_single_asset_weight.", "Cash remains above the requested minimum."],
+  "confidence": 0.71,
+  "confidence_breakdown": {
+    "base_confidence": 0.79,
+    "risk_adjusted_confidence": 0.71,
+    "risk_cap": 0.75,
+    "source_quality_cap": 0.9,
+    "market_confidence": 0.74,
+    "ml_confidence": 0.7,
+    "sentiment_confidence": 0.65,
+    "valuation_confidence": 0.62,
+    "risk_adjustment": -0.06,
+    "source_quality_adjustment": -0.02
+  },
+  "validation_result": {
+    "passed": true,
+    "violations": []
+  },
+  "requires_human_review": false,
+  "review_reasons": [],
+  "audit": {
+    "run_id": "run_20260513_010",
+    "request_id": "req_20260513_010",
+    "model_provider": "DeepSeek",
+    "model_name": "deepseek-v4-flash",
+    "framework": "CrewAI",
+    "temperature": 0.2,
+    "input_request_hash": "sha256:req010",
+    "tool_result_bundle_hash": "sha256:tools010",
+    "validator_version": "v1.0.0",
+    "created_at": "2026-05-13T16:01:00Z"
+  },
+  "retrieved_tool_audit": {
+    "tool_calls": [
+      {
+        "tool": "MarketFeatureTool",
+        "status": "SUCCESS",
+        "source_refs": ["postgresql.real_time_prices:AAPL:2026-05-13T16:00:00Z"],
+        "result_hash": "sha256:market010"
+      }
+    ],
+    "tool_result_bundle_hash": "sha256:tools010"
+  },
+  "data_citations": ["postgresql.user_portfolio:req_20260513_010"],
+  "not_financial_advice": true
+}
