@@ -17,7 +17,7 @@ class AgentRouteServices:
         return _response(route, "symbol_comparison", result.model_dump())
 
     def watchlist_review(self, route: RoutedAgentQuery) -> AgentQueryResponse:
-        result = WatchlistReviewResult(items=[WatchlistItem(symbol=str(row.get("Symbol") or row.get("symbol")), final_score=_float(row.get("final_score"))) for row in self.market_screen_provider.load_symbols(route.symbols)])
+        result = WatchlistReviewResult(items=[_watchlist_item(row) for row in self.market_screen_provider.load_symbols(route.symbols)])
         return _response(route, "watchlist_review", result.model_dump())
 
     def universe_screen(self, route: RoutedAgentQuery) -> AgentQueryResponse:
@@ -82,12 +82,58 @@ def _response(route: RoutedAgentQuery, result_type: str, result: dict[str, Any])
 
 
 def _screen_candidate(row: dict[str, Any]) -> ScreenCandidate:
-    return ScreenCandidate(symbol=str(row.get("Symbol") or row.get("symbol")), final_score=_float(row.get("final_score")), predicted_direction=str(row.get("pred_a") or row.get("predicted_direction") or ""), as_of=str(row.get("Datetime") or ""))
+    warnings = _warnings(row)
+    return ScreenCandidate(
+        symbol=_symbol(row),
+        final_score=_float(row.get("final_score")),
+        predicted_direction=_str_or_none(row.get("pred_a") or row.get("predicted_direction")),
+        as_of=_str_or_none(row.get("freshness") or row.get("as_of") or row.get("Datetime")),
+        latest_price=_float(_first_present(row, "latest_price", "Close")),
+        r1=_float(row.get("r1")),
+        RVOL20=_float(row.get("RVOL20")),
+        RSI14=_float(row.get("RSI14")),
+        risk_prob=_float(row.get("risk_prob")),
+        status="warning" if warnings else "ok",
+        warnings=warnings,
+    )
 
 
 def _comparison_row(row: dict[str, Any], rank: int) -> ComparisonRow:
     c = _screen_candidate(row)
-    return ComparisonRow(symbol=c.symbol, final_score=c.final_score, predicted_direction=c.predicted_direction, rank=rank)
+    return ComparisonRow(symbol=c.symbol, final_score=c.final_score, predicted_direction=c.predicted_direction, rank=rank, latest_price=c.latest_price, r1=c.r1, RVOL20=c.RVOL20, RSI14=c.RSI14, risk_prob=c.risk_prob, as_of=c.as_of, status=c.status, warnings=c.warnings)
+
+
+def _watchlist_item(row: dict[str, Any]) -> WatchlistItem:
+    c = _screen_candidate(row)
+    return WatchlistItem(symbol=c.symbol, status=c.status or "reviewed", final_score=c.final_score, predicted_direction=c.predicted_direction, latest_price=c.latest_price, r1=c.r1, RVOL20=c.RVOL20, RSI14=c.RSI14, risk_prob=c.risk_prob, as_of=c.as_of, warnings=c.warnings)
+
+
+def _symbol(row: dict[str, Any]) -> str:
+    return str(row.get("Symbol") or row.get("symbol") or "")
+
+
+def _first_present(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in row and row.get(key) is not None:
+            return row.get(key)
+    return None
+
+
+def _str_or_none(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _warnings(row: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    if _symbol(row) == "":
+        warnings.append("missing symbol")
+    if _first_present(row, "freshness", "as_of", "Datetime") is None:
+        warnings.append("missing as_of")
+    if _first_present(row, "latest_price", "Close") is None:
+        warnings.append("missing latest_price")
+    if row.get("final_score") is None:
+        warnings.append("missing final_score")
+    return warnings
 
 
 def _float(value: Any) -> float | None:

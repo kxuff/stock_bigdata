@@ -10,6 +10,13 @@ class ScreenCandidate(BaseModel):
     final_score: float | None = None
     predicted_direction: str | None = None
     as_of: str | None = None
+    latest_price: float | None = None
+    r1: float | None = None
+    RVOL20: float | None = None
+    RSI14: float | None = None
+    risk_prob: float | None = None
+    status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class UniverseScreenResult(BaseModel):
@@ -26,6 +33,14 @@ class ComparisonRow(BaseModel):
     final_score: float | None = None
     predicted_direction: str | None = None
     rank: int | None = None
+    latest_price: float | None = None
+    r1: float | None = None
+    RVOL20: float | None = None
+    RSI14: float | None = None
+    risk_prob: float | None = None
+    as_of: str | None = None
+    status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SymbolComparisonResult(BaseModel):
@@ -40,6 +55,14 @@ class WatchlistItem(BaseModel):
     symbol: str
     status: str = "reviewed"
     final_score: float | None = None
+    predicted_direction: str | None = None
+    latest_price: float | None = None
+    r1: float | None = None
+    RVOL20: float | None = None
+    RSI14: float | None = None
+    risk_prob: float | None = None
+    as_of: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class WatchlistReviewResult(BaseModel):

@@ -224,15 +224,46 @@ def _render_agent_response(response: dict) -> None:
             st.markdown(f"- {action.get('label', action)}")
 
 
+def _render_route_metrics(rows: list[dict]) -> None:
+    scored = [row for row in rows if row.get("final_score") is not None]
+    priced = [row for row in rows if row.get("latest_price") is not None]
+    warnings = [warning for row in rows for warning in (row.get("warnings") or [])]
+    cols = st.columns(3)
+    cols[0].metric("Rows", len(rows))
+    cols[1].metric("Scored", len(scored))
+    cols[2].metric("Warnings", len(warnings))
+    if priced:
+        top = max(priced, key=lambda row: row.get("final_score") or float("-inf"))
+        st.caption(f"Top priced row: {top.get('symbol', 'unknown')} @ {top.get('latest_price')}")
+
+
+def _render_route_warnings(rows: list[dict]) -> None:
+    messages = []
+    for row in rows:
+        symbol = row.get("symbol") or row.get("Symbol") or "unknown"
+        for warning in row.get("warnings") or []:
+            messages.append(f"{symbol}: {warning}")
+    if messages:
+        with st.expander("Data warnings", expanded=True):
+            for message in messages[:25]:
+                st.warning(message)
+
+
 def _render_structured_agent_result(result_type: str, result: dict) -> None:
     if result_type == "symbol_comparison":
         rows = result.get("rows") or []
         if rows:
+            _render_route_metrics(rows)
+            _render_route_warnings(rows)
             st.dataframe(rows, width="stretch", hide_index=True)
+        else:
+            st.info("No comparison rows returned.")
         return
     if result_type == "universe_screen":
         rows = result.get("candidates") or []
         if rows:
+            _render_route_metrics(rows)
+            _render_route_warnings(rows)
             st.dataframe(rows, width="stretch", hide_index=True)
         diagnostics = result.get("diagnostics") or {}
         if diagnostics:
@@ -242,14 +273,22 @@ def _render_structured_agent_result(result_type: str, result: dict) -> None:
     if result_type == "watchlist_review":
         rows = result.get("items") or []
         if rows:
+            _render_route_metrics(rows)
+            _render_route_warnings(rows)
             st.dataframe(rows, width="stretch", hide_index=True)
+        else:
+            st.info("No watchlist items returned.")
         return
     if result_type == "market_brief":
         if result.get("summary"):
             st.write(result["summary"])
         leaders = result.get("leaders") or []
         if leaders:
+            _render_route_metrics(leaders)
+            _render_route_warnings(leaders)
             st.dataframe(leaders, width="stretch", hide_index=True)
+        else:
+            st.info("No market leaders returned.")
         return
     if result_type == "data_diagnostics":
         st.json(result.get("diagnostics") or result)
