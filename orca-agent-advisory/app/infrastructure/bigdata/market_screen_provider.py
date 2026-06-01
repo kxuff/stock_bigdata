@@ -22,8 +22,14 @@ class BigdataMarketScreenProvider:
             if latest_date is None:
                 return []
             window = Window.orderBy(F.col("final_score").desc_nulls_last())
-            rows = p.where(F.col("Datetime") == F.lit(latest_date)).withColumn("rank", F.row_number().over(window)).where(F.col("rank") <= int(limit)).limit(int(limit)).collect()
-            return [row.asDict(recursive=True) for row in rows]
+            top = (
+                p.where(F.col("Datetime") == F.lit(latest_date))
+                .withColumn("rank", F.row_number().over(window))
+                .where(F.col("rank") <= int(limit))
+                .limit(int(limit))
+            )
+            top = self._enrich(spark, top)
+            return [row.asDict(recursive=True) for row in top.collect()]
         except Exception:  # noqa: BLE001 - route must fail soft when lakehouse table is absent.
             return []
 
@@ -37,10 +43,55 @@ class BigdataMarketScreenProvider:
             spark = _build_spark_session(SparkSession.builder, self.table_config.spark_app_name or "orca-market-screen-provider", self.table_config)
             p = spark.table(self.table_config.table_ref(self.table_config.prediction_table)).where(F.col("Symbol").isin(normalized))
             window = Window.partitionBy("Symbol").orderBy(F.col("Datetime").desc())
-            rows = p.withColumn("_rn", F.row_number().over(window)).where(F.col("_rn") == 1).drop("_rn").limit(len(normalized)).collect()
-            return [row.asDict(recursive=True) for row in rows]
+            top = (
+                p.withColumn("_rn", F.row_number().over(window))
+                .where(F.col("_rn") == 1)
+                .drop("_rn")
+                .limit(len(normalized))
+            )
+            top = self._enrich(spark, top)
+            return [row.asDict(recursive=True) for row in top.collect()]
         except Exception:  # noqa: BLE001 - route must fail soft when lakehouse table is absent.
             return []
+
+    def _enrich(self, spark, df):
+        """Enrich predictions with latest_price and technical indicators (best-effort)."""
+        from pyspark.sql import Window, functions as F  # type: ignore[import-not-found]
+
+        # ── 1. latest_price from curated EOD prices ──────────────────────────
+        try:
+            price_tbl = self.table_config.table_ref("curated.us_stock_eod_prices")
+            prices = spark.table(price_tbl)
+            w_p = Window.partitionBy("Symbol").orderBy(F.col("Datetime").desc())
+            latest_price = (
+                prices.select("Symbol", "Close", "Datetime")
+                .withColumn("_rn", F.row_number().over(w_p))
+                .where(F.col("_rn") == 1)
+                .drop("_rn", "Datetime")
+                .withColumnRenamed("Close", "latest_price")
+            )
+            df = df.join(latest_price, on="Symbol", how="left")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── 2. Technical indicators from ml_ready.stock_price_features (if exists) ─
+        try:
+            feat_tbl = self.table_config.table_ref("ml_ready.stock_price_features")
+            features = spark.table(feat_tbl)
+            feat_cols = [c for c in ("r1", "r3", "r5", "RSI14", "RVOL20", "ATR14") if c in features.columns]
+            if feat_cols:
+                w_f = Window.partitionBy("Symbol").orderBy(F.col("Datetime").desc())
+                latest_feat = (
+                    features.select("Symbol", "Datetime", *feat_cols)
+                    .withColumn("_rn", F.row_number().over(w_f))
+                    .where(F.col("_rn") == 1)
+                    .drop("_rn", "Datetime")
+                )
+                df = df.join(latest_feat, on="Symbol", how="left")
+        except Exception:  # noqa: BLE001 - market_features table may not exist yet
+            pass
+
+        return df
 
     def diagnose(self) -> dict[str, Any]:
         from pyspark.sql import functions as F, SparkSession  # type: ignore[import-not-found]
