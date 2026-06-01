@@ -382,7 +382,7 @@ services:
       ORCA_S3_ENDPOINT_URL: http://minio:9000
       ORCA_MINIO_ACCESS_KEY: admin
       ORCA_MINIO_SECRET_KEY: password
-      ORCA_ML_PREDICTION_TABLE: ml_ready.stock_predictions
+      ORCA_ML_PREDICTION_TABLE: ml_ready.stock_predictions_v2
       ORCA_ML_FEATURE_TABLE: ml_ready.stock_price_features
       ORCA_CURATED_PRICE_TABLE: curated.us_stock_eod_prices
       ORCA_SENTIMENT_TABLE: ml_ready.stock_sentiment_context
@@ -427,7 +427,7 @@ services:
       ORCA_S3_ENDPOINT_URL: http://minio:9000
       ORCA_MINIO_ACCESS_KEY: admin
       ORCA_MINIO_SECRET_KEY: password
-      ORCA_ML_PREDICTION_TABLE: ml_ready.stock_predictions
+      ORCA_ML_PREDICTION_TABLE: ml_ready.stock_predictions_v2
       ORCA_ML_FEATURE_TABLE: ml_ready.stock_price_features
       ORCA_CURATED_PRICE_TABLE: curated.us_stock_eod_prices
       ORCA_SENTIMENT_TABLE: ml_ready.stock_sentiment_context
