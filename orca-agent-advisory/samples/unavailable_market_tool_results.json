@@ -1,0 +1,16 @@
+{
+  "market_features": {
+    "tool": "MarketFeatureTool",
+    "status": "UNAVAILABLE",
+    "request_id": "req_20260513_001",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {},
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:45:00Z",
+      "max_age_seconds": 900
+    },
+    "source_refs": [],
+    "error_message": "Market feature tool timed out."
+  }
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "Datetime": "2026-05-13T15:45:00Z",
+    "Symbol": "AAPL",
+    "Close": 276.84,
+    "r1": -0.0072,
+    "RVOL20": 1.15,
+    "RSI14": 58.3,
+    "MACD_hist": 0.12,
+    "dist_ema20": 0.015,
+    "vol20": 0.24,
+    "maxdd20": -0.11,
+    "beta_60D": 1.18,
+    "pred_a": 0.64,
+    "risk_prob": 0.36,
+    "final_score": 0.4096,
+    "model_version": "model_a+model_c-demo",
+    "feature_version": "price_v1_notebook_ac"
+  }
+]

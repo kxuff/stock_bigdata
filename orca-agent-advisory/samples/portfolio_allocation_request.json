@@ -1,0 +1,23 @@
+{
+  "request_id": "req_20260513_010",
+  "timestamp": "2026-05-13T16:00:00Z",
+  "as_of_timestamp": "2026-05-13T16:00:00Z",
+  "user_query": "Rebalance my technology portfolio.",
+  "decision_mode": "portfolio_recommendation",
+  "symbols": ["AAPL", "MSFT"],
+  "user_context": {
+    "risk_tolerance": "MODERATE",
+    "investment_horizon": "LONG_TERM",
+    "target_sectors": ["Technology"],
+    "excluded_symbols": [],
+    "max_single_asset_weight": 40,
+    "allow_cash_position": true,
+    "custom_constraints": {
+      "min_cash_weight": 20
+    }
+  },
+  "metadata": {
+    "client": "web",
+    "locale": "en-US"
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "market_features": {
+    "tool": "MarketFeatureTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_001",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "AAPL": {
+        "latest_price": 276.84,
+        "price_change_pct_1d": -0.72,
+        "volume_ratio_20d": 1.15,
+        "trend_direction": "UP",
+        "technical_indicators": {
+          "rsi_14": 58.3,
+          "macd_signal": "BULLISH_CROSSOVER",
+          "bollinger_position": "MIDDLE",
+          "sma20_vs_price": "ABOVE"
+        }
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:45:00Z",
+      "max_age_seconds": 900
+    },
+    "source_refs": [
+      "postgresql.real_time_prices:AAPL:2026-05-13T15:45:00Z",
+      "postgresql.technical_signals:AAPL:2026-05-13T15:45:00Z"
+    ]
+  },
+  "ml_predictions": {
+    "tool": "MlPredictionTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_001",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "AAPL": {
+        "predicted_direction": "UP",
+        "probability_up": 0.64,
+        "probability_down": 0.36,
+        "model_version": "lstm-xgb-2026-05",
+        "feature_window": "20d"
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:40:00Z",
+      "max_age_seconds": 3600
+    },
+    "source_refs": ["spark.gold.ml_predictions:AAPL:2026-05-13T15:40:00Z"]
+  },
+  "sentiment_snapshot": {
+    "tool": "NewsSentimentTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_001",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "AAPL": {
+        "sentiment_label": "BULLISH",
+        "sentiment_score": 0.38,
+        "article_count": 12,
+        "top_drivers": ["positive product demand coverage", "stable analyst commentary"]
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:35:00Z",
+      "max_age_seconds": 7200
+    },
+    "source_refs": ["mongodb.news_sentiment:AAPL:2026-05-13T15:35:00Z"]
+  },
+  "valuation_snapshot": {
+    "tool": "FundamentalsTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_001",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "AAPL": {
+        "valuation_label": "FAIRLY_VALUED",
+        "pe_ratio": 31.2,
+        "sector_pe_ratio": 29.8,
+        "fair_value_estimate": 270.0,
+        "upside_downside_pct": -2.47
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T14:00:00Z",
+      "max_age_seconds": 86400
+    },
+    "source_refs": ["spark.gold.fundamentals:AAPL:2026-05-13"]
+  },
+  "risk_snapshot": {
+    "tool": "RiskFeatureTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_001",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "AAPL": {
+        "risk_label": "MEDIUM",
+        "volatility_30d": 0.24,
+        "max_drawdown_90d": -0.11,
+        "beta": 1.18,
+        "risk_factors": ["large-cap technology concentration"],
+        "confidence_cap": 0.78
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:30:00Z",
+      "max_age_seconds": 3600
+    },
+    "source_refs": ["postgresql.risk_features:AAPL:2026-05-13T15:30:00Z"]
+  }
+}

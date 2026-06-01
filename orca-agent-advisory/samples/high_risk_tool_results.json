@@ -1,0 +1,112 @@
+{
+  "market_features": {
+    "tool": "MarketFeatureTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_002",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "TSLA": {
+        "latest_price": 182.4,
+        "price_change_pct_1d": 4.8,
+        "volume_ratio_20d": 2.4,
+        "trend_direction": "UP",
+        "technical_indicators": {
+          "rsi_14": 72.1,
+          "macd_signal": "BULLISH_CROSSOVER",
+          "bollinger_position": "UPPER",
+          "sma20_vs_price": "ABOVE"
+        }
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:45:00Z",
+      "max_age_seconds": 900
+    },
+    "source_refs": ["postgresql.real_time_prices:TSLA:2026-05-13T15:45:00Z"]
+  },
+  "ml_predictions": {
+    "tool": "MlPredictionTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_002",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "TSLA": {
+        "predicted_direction": "UP",
+        "probability_up": 0.71,
+        "probability_down": 0.29,
+        "model_version": "lstm-xgb-2026-05",
+        "feature_window": "20d"
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:40:00Z",
+      "max_age_seconds": 3600
+    },
+    "source_refs": ["spark.gold.ml_predictions:TSLA:2026-05-13T15:40:00Z"]
+  },
+  "sentiment_snapshot": {
+    "tool": "NewsSentimentTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_002",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "TSLA": {
+        "sentiment_label": "MIXED",
+        "sentiment_score": -0.08,
+        "article_count": 18,
+        "top_drivers": ["mixed delivery commentary", "regulatory uncertainty"]
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:25:00Z",
+      "max_age_seconds": 7200
+    },
+    "source_refs": ["mongodb.news_sentiment:TSLA:2026-05-13T15:25:00Z"]
+  },
+  "valuation_snapshot": {
+    "tool": "FundamentalsTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_002",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "TSLA": {
+        "valuation_label": "OVERVALUED",
+        "pe_ratio": 68.5,
+        "sector_pe_ratio": 24.2,
+        "fair_value_estimate": 150.0,
+        "upside_downside_pct": -17.76
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T14:00:00Z",
+      "max_age_seconds": 86400
+    },
+    "source_refs": ["spark.gold.fundamentals:TSLA:2026-05-13"]
+  },
+  "risk_snapshot": {
+    "tool": "RiskFeatureTool",
+    "status": "SUCCESS",
+    "request_id": "req_20260513_002",
+    "as_of_timestamp": "2026-05-13T15:45:00Z",
+    "data": {
+      "TSLA": {
+        "risk_label": "HIGH",
+        "volatility_30d": 0.53,
+        "max_drawdown_90d": -0.28,
+        "beta": 2.05,
+        "risk_factors": ["high volatility", "valuation drawdown risk"],
+        "confidence_cap": 0.55
+      }
+    },
+    "freshness": {
+      "is_stale": false,
+      "last_updated_at": "2026-05-13T15:30:00Z",
+      "max_age_seconds": 3600
+    },
+    "source_refs": ["postgresql.risk_features:TSLA:2026-05-13T15:30:00Z"]
+  }
+}
