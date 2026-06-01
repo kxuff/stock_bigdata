@@ -1,7 +1,9 @@
 from app.application.use_cases.route_services import AgentRouteServices
 from app.application.ports.backtest_provider import BacktestProviderResult, BacktestRequest
+from app.application.ports.portfolio_provider import InMemoryPortfolioProvider
 from app.schemas.agent import AgentQueryRequest, AgentContext, RoutedAgentQuery
 from app.schemas.enums import AgentRoute
+from app.schemas.portfolio import PortfolioAccountSnapshot, PortfolioPosition
 
 
 class FakeMarketScreenProvider:
@@ -112,3 +114,79 @@ def test_backtest_code_does_not_import_yfinance() -> None:
     app_dir = pathlib.Path(__file__).parents[1] / "app"
     matches = [path for path in app_dir.rglob("*.py") if "import yfinance" in path.read_text(encoding="utf-8") or "from yfinance" in path.read_text(encoding="utf-8")]
     assert matches == []
+
+
+def test_portfolio_rebalance_uses_provider_snapshot_when_account_id_present() -> None:
+    provider = InMemoryPortfolioProvider({
+        "acct-1": PortfolioAccountSnapshot(
+            account_id="acct-1",
+            tenant_id="tenant-a",
+            base_currency="USD",
+            positions=[PortfolioPosition(symbol="AAA", weight=70), PortfolioPosition(symbol="BBB", market_value=20)],
+            cash=10,
+            as_of="2026-01-02T00:00:00Z",
+            source="test",
+        )
+    })
+    request = AgentQueryRequest(message="rebalance", context=AgentContext(metadata={"account_id": "acct-1", "tenant_id": "tenant-a"}))
+
+    response = AgentRouteServices(FakeMarketScreenProvider(), portfolio_provider=provider).portfolio_rebalance(request, _route(AgentRoute.PORTFOLIO_REBALANCE, []))
+
+    assert response.symbols == ["AAA", "BBB"]
+    assert response.result["changes"][0]["current_weight"] == 70.0
+    assert response.result["constraints"]["trade_execution"] == "disabled"
+    assert response.result["human_review_required"] is True
+
+
+def test_portfolio_rebalance_tenant_mismatch_does_not_leak_provider_or_context() -> None:
+    provider = InMemoryPortfolioProvider({
+        "acct-1": PortfolioAccountSnapshot(
+            account_id="acct-1",
+            tenant_id="tenant-a",
+            base_currency="USD",
+            positions=[PortfolioPosition(symbol="SECRET", weight=100)],
+            cash=0,
+            as_of="2026-01-02T00:00:00Z",
+            source="test",
+        )
+    })
+    request = AgentQueryRequest(message="rebalance", context=AgentContext(metadata={"account_id": "acct-1", "tenant_id": "tenant-b", "holdings": [{"symbol": "AAA", "weight": 50}]}))
+
+    response = AgentRouteServices(FakeMarketScreenProvider(), portfolio_provider=provider).portfolio_rebalance(request, _route(AgentRoute.PORTFOLIO_REBALANCE, []))
+
+    assert response.symbols == []
+    assert response.result["changes"] == []
+    assert "SECRET" not in str(response.result)
+
+
+def test_portfolio_rebalance_empty_or_malformed_portfolio_is_safe() -> None:
+    request = AgentQueryRequest(message="rebalance", context=AgentContext(metadata={"portfolio": {"positions": [{"symbol": "AAA"}, "bad"]}}))
+
+    response = AgentRouteServices(FakeMarketScreenProvider()).portfolio_rebalance(request, _route(AgentRoute.PORTFOLIO_REBALANCE, []))
+
+    assert response.result["changes"] == []
+    assert response.result["human_review_required"] is True
+    assert response.result["constraints"]["trade_execution"] == "disabled"
+
+
+def test_portfolio_rebalance_applies_constraints_and_excluded_symbols() -> None:
+    request = AgentQueryRequest(
+        message="rebalance",
+        context=AgentContext(metadata={"holdings": [{"symbol": "AAA", "weight": 80}, {"symbol": "BBB", "weight": 10}, {"symbol": "CCC", "weight": 10}], "excluded_symbols": ["BBB"], "allowed_symbols": ["AAA", "CCC"], "max_single_asset_weight": 30, "min_cash_weight": 20}),
+    )
+
+    response = AgentRouteServices(FakeMarketScreenProvider()).portfolio_rebalance(request, _route(AgentRoute.PORTFOLIO_REBALANCE, []))
+
+    assert response.symbols == ["AAA", "CCC"]
+    assert [change["target_weight"] for change in response.result["changes"]] == [30.0, 30.0]
+    assert response.result["cash_target_weight"] == 40.0
+    assert response.result["constraints"]["excluded_symbols"] == ["BBB"]
+
+
+def test_portfolio_rebalance_never_sets_trade_execution_enabled() -> None:
+    request = AgentQueryRequest(message="rebalance", context=AgentContext(metadata={"holdings": [{"symbol": "AAA", "weight": 100}], "trade_execution": "enabled"}))
+
+    response = AgentRouteServices(FakeMarketScreenProvider()).portfolio_rebalance(request, _route(AgentRoute.PORTFOLIO_REBALANCE, []))
+
+    assert response.result["constraints"]["trade_execution"] == "disabled"
+    assert response.result["human_review_required"] is True

@@ -4,8 +4,10 @@ from typing import Any
 
 from app.application.ports.backtest_provider import BacktestProvider, BacktestRequest
 from app.application.ports.market_screen_provider import MarketScreenProvider
+from app.application.ports.portfolio_provider import PortfolioProvider
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse, RoutedAgentQuery, SuggestedAction
 from app.schemas.enums import AgentRoute
+from app.schemas.portfolio import PortfolioAccountSnapshot
 from app.schemas.route_results import BacktestAnalysisResult, ComparisonRow, DataDiagnosticsResult, MarketBriefResult, PortfolioRebalanceChange, PortfolioRebalanceResult, ScreenCandidate, SymbolComparisonResult, UniverseScreenResult, WatchlistItem, WatchlistReviewResult
 
 
@@ -13,6 +15,7 @@ from app.schemas.route_results import BacktestAnalysisResult, ComparisonRow, Dat
 class AgentRouteServices:
     market_screen_provider: MarketScreenProvider
     backtest_provider: BacktestProvider | None = None
+    portfolio_provider: PortfolioProvider | None = None
 
     def symbol_comparison(self, route: RoutedAgentQuery) -> AgentQueryResponse:
         rows = [_comparison_row(row, i + 1) for i, row in enumerate(sorted(self.market_screen_provider.load_symbols(route.symbols), key=lambda r: r.get("final_score") or 0, reverse=True))]
@@ -37,27 +40,39 @@ class AgentRouteServices:
         return _response(route, "data_diagnostics", result.model_dump())
 
     def portfolio_rebalance(self, request: AgentQueryRequest, route: RoutedAgentQuery) -> AgentQueryResponse:
-        holdings = _holdings_from_context(request)
+        metadata = request.context.metadata
+        constraints = _portfolio_constraints(metadata)
+        has_account_id = bool(str(metadata.get("account_id") or "").strip())
+        snapshot = _snapshot_from_provider(self.portfolio_provider, metadata)
+        holdings = _holdings_from_snapshot(snapshot) if snapshot is not None else ([] if has_account_id else _holdings_from_context(request))
         if not holdings:
             return AgentQueryResponse(
                 route=route.route,
                 status="immediate",
                 message="Portfolio rebalance needs holdings in context.metadata.portfolio or context.metadata.holdings. Format: [{'symbol':'AAPL','weight':25}, {'symbol':'MSFT','weight':35}]. No trades executed.",
-                symbols=route.symbols,
+                symbols=[] if has_account_id else route.symbols,
                 result_type="portfolio_rebalance",
-                result=PortfolioRebalanceResult(message="Missing portfolio holdings. Provide symbols with current weights.", constraints={"max_single_asset_weight": 40.0}, human_review_required=True).model_dump(),
+                result=PortfolioRebalanceResult(message="Missing portfolio holdings. Provide symbols with current weights.", constraints=constraints, human_review_required=True).model_dump(),
                 suggested_actions=route.suggested_actions,
                 router_confidence=route.confidence,
             )
+        excluded = set(constraints["excluded_symbols"])
+        allowed = set(constraints["allowed_symbols"])
+        holdings = [holding for holding in holdings if holding["symbol"] not in excluded and (not allowed or holding["symbol"] in allowed)]
+        if not holdings:
+            result = PortfolioRebalanceResult(changes=[], cash_target_weight=100.0, constraints=constraints, human_review_required=True, message="No eligible portfolio holdings after constraints. No trades executed.")
+            return AgentQueryResponse(route=route.route, status="immediate", message=result.message, symbols=[], result_type="portfolio_rebalance", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)
         symbols = [holding["symbol"] for holding in holdings]
-        target = min(40.0, round(100.0 / len(symbols), 2))
+        max_weight = float(constraints["max_single_asset_weight"])
+        min_cash = float(constraints["min_cash_weight"])
+        target = min(max_weight, round((100.0 - min_cash) / len(symbols), 2))
         total_target = round(target * len(symbols), 2)
-        cash = round(max(0.0, 100.0 - total_target), 2)
+        cash = round(max(min_cash, 100.0 - total_target), 2)
         changes = [PortfolioRebalanceChange(symbol=holding["symbol"], current_weight=holding["weight"], target_weight=target, change=round(target - holding["weight"], 2)) for holding in holdings]
         result = PortfolioRebalanceResult(
             changes=changes,
             cash_target_weight=cash,
-            constraints={"max_single_asset_weight": 40.0, "target_method": "equal_weight_capped", "trade_execution": "disabled"},
+            constraints=constraints,
             human_review_required=True,
             message="Deterministic planning-only rebalance. Review before any action; ORCA backend does not execute trades.",
         )
@@ -208,3 +223,44 @@ def _holdings_from_context(request: AgentQueryRequest) -> list[dict[str, Any]]:
         if symbol and weight is not None:
             holdings.append({"symbol": symbol, "weight": round(weight, 2)})
     return holdings
+
+
+def _snapshot_from_provider(provider: PortfolioProvider | None, metadata: dict[str, Any]) -> PortfolioAccountSnapshot | None:
+    if provider is None:
+        return None
+    account_id = str(metadata.get("account_id") or "").strip()
+    if not account_id:
+        return None
+    tenant_id = _str_or_none(metadata.get("tenant_id"))
+    return provider.get_account_snapshot(account_id=account_id, tenant_id=tenant_id)
+
+
+def _holdings_from_snapshot(snapshot: PortfolioAccountSnapshot) -> list[dict[str, Any]]:
+    holdings: list[dict[str, Any]] = []
+    total_value = sum(position.market_value or 0.0 for position in snapshot.positions) + max(snapshot.cash, 0.0)
+    for position in snapshot.positions:
+        symbol = position.symbol.strip().upper().replace(".", "-")
+        weight = position.weight
+        if weight is None and position.market_value is not None and total_value > 0:
+            weight = (position.market_value / total_value) * 100.0
+        if symbol and weight is not None:
+            holdings.append({"symbol": symbol, "weight": round(float(weight), 2)})
+    return holdings
+
+
+def _portfolio_constraints(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "max_single_asset_weight": _float(metadata.get("max_single_asset_weight")) or 40.0,
+        "min_cash_weight": _float(metadata.get("min_cash_weight")) or 0.0,
+        "excluded_symbols": _symbol_list(metadata.get("excluded_symbols")),
+        "allowed_symbols": _symbol_list(metadata.get("allowed_symbols")),
+        "target_method": "equal_weight_capped",
+        "trade_execution": "disabled",
+        "human_review_required": True,
+    }
+
+
+def _symbol_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip().upper().replace(".", "-") for item in value if str(item).strip()]
