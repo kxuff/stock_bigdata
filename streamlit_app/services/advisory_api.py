@@ -59,6 +59,12 @@ def create_decision_job(payload: dict[str, Any], timeout: float = 30.0) -> dict[
     return response.json()
 
 
+def create_agent_query(payload: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
+    response = requests.post(api_url("/api/v1/agent/query"), json=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
 def get_decision_job(job_id: str, timeout: float = 5.0) -> dict[str, Any]:
     response = requests.get(api_url(f"/api/v1/advisory/decision-jobs/{job_id}"), timeout=timeout)
     response.raise_for_status()

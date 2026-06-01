@@ -12,11 +12,13 @@ from pydantic import ValidationError
 
 from app.schemas.decision import ErrorResponse, PortfolioDecision, SingleSymbolDecision
 from app.schemas.request import AdvisoryDecisionRequest
+from app.schemas.agent import AgentQueryRequest, AgentQueryResponse
 from app.schemas.tool_results import ToolResultValidationError
 from app.config import load_settings
 from app.application.ports.tool_result_provider import ToolResultProvider
 from app.application.use_cases.advisory_decision_service import AdvisoryDecisionService, DecisionValidationError
-from app.bootstrap.container import build_decision_service, build_tool_result_provider
+from app.application.use_cases.autonomous_agent_service import AutonomousAgentService
+from app.bootstrap.container import build_autonomous_agent_service, build_decision_service, build_tool_result_provider
 from app.infrastructure.storage.decision_job_store import (
     DecisionJobStore,
     IdempotencyConflictError,
@@ -26,6 +28,7 @@ from app.infrastructure.queue.decision_job_queue import DecisionJobQueue
 
 
 app = FastAPI(title="Orca Agent Advisory API", version="0.1.0")
+
 
 # Dev/first-cut job store only. In-memory dict is not multi-worker safe.
 _jobs: dict[str, dict[str, Any]] = {}
@@ -42,6 +45,10 @@ def get_decision_service() -> AdvisoryDecisionService:
 
 def get_tool_result_provider() -> ToolResultProvider:
     return build_tool_result_provider(load_settings())
+
+
+def get_autonomous_agent_service() -> AutonomousAgentService:
+    return build_autonomous_agent_service(load_settings())
 
 
 def get_decision_job_store() -> DecisionJobStore | None:
@@ -151,6 +158,22 @@ def create_advisory_decision(
 
 @app.post("/api/v1/advisory/decision-jobs", status_code=status.HTTP_202_ACCEPTED)
 def create_advisory_decision_job(
+    request: AdvisoryDecisionRequest,
+    http_request: Request,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    return _create_decision_job(request, http_request, background_tasks)
+
+
+@app.post("/api/v1/agent/query", response_model=AgentQueryResponse)
+def create_agent_query(
+    request: AgentQueryRequest,
+    autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
+) -> AgentQueryResponse:
+    return autonomous_agent_service.query(request)
+
+
+def _create_decision_job(
     request: AdvisoryDecisionRequest,
     http_request: Request,
     background_tasks: BackgroundTasks,

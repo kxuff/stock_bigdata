@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from services.advisory_api import create_decision_job, fetch_health, fetch_readiness, fetch_status, stream_decision_job_events
+from services.advisory_api import create_agent_query, fetch_health, fetch_status, stream_decision_job_events
 
 
 st.set_page_config(page_title="AI Chat", page_icon="💬", layout="wide")
@@ -188,6 +188,121 @@ def _render_decision(decision: dict) -> None:
         )
 
     st.text_area("Copy summary", _decision_summary(decision), height=110, key=f"summary-{decision.get('run_id', uuid4())}")
+
+
+def _render_agent_response(response: dict) -> None:
+    result_type = response.get("result_type")
+    result = response.get("result") or {}
+    st.caption(f"Route: {response.get('route', 'unknown')} · confidence {response.get('router_confidence', 0):.2f}")
+    if response.get("message"):
+        st.info(response["message"])
+    if result_type == "single_symbol_decision":
+        _render_decision(result)
+        return
+    if result_type in {
+        "symbol_comparison",
+        "universe_screen",
+        "watchlist_review",
+        "market_brief",
+        "data_diagnostics",
+        "portfolio_rebalance",
+        "backtest_analysis",
+        "streaming_pipeline_health",
+        "streaming_freshness_check",
+        "streaming_alert_review",
+        "streaming_symbol_monitor",
+        "streaming_feature_drift",
+        "streaming_ingestion_lag",
+        "streaming_topic_inspection",
+        "streaming_quality_incidents",
+    }:
+        _render_structured_agent_result(result_type, result)
+    actions = response.get("suggested_actions") or []
+    if actions:
+        st.markdown("**Suggested actions**")
+        for action in actions[:5]:
+            st.markdown(f"- {action.get('label', action)}")
+
+
+def _render_structured_agent_result(result_type: str, result: dict) -> None:
+    if result_type == "symbol_comparison":
+        rows = result.get("rows") or []
+        if rows:
+            st.dataframe(rows, width="stretch", hide_index=True)
+        return
+    if result_type == "universe_screen":
+        rows = result.get("candidates") or []
+        if rows:
+            st.dataframe(rows, width="stretch", hide_index=True)
+        diagnostics = result.get("diagnostics") or {}
+        if diagnostics:
+            with st.expander("Diagnostics"):
+                st.json(diagnostics)
+        return
+    if result_type == "watchlist_review":
+        rows = result.get("items") or []
+        if rows:
+            st.dataframe(rows, width="stretch", hide_index=True)
+        return
+    if result_type == "market_brief":
+        if result.get("summary"):
+            st.write(result["summary"])
+        leaders = result.get("leaders") or []
+        if leaders:
+            st.dataframe(leaders, width="stretch", hide_index=True)
+        return
+    if result_type == "data_diagnostics":
+        st.json(result.get("diagnostics") or result)
+        return
+    if result_type == "portfolio_rebalance":
+        if result.get("message"):
+            st.warning(result["message"])
+        changes = result.get("changes") or []
+        if changes:
+            st.dataframe(changes, width="stretch", hide_index=True)
+        cols = st.columns(2)
+        cols[0].metric("Cash target", result.get("cash_target_weight", 0))
+        cols[1].metric("Human review", str(result.get("human_review_required", True)))
+        with st.expander("Constraints"):
+            st.json(result.get("constraints") or {})
+        return
+    if result_type == "backtest_analysis":
+        st.info(result.get("limitation") or "Backtest service not connected.")
+        if result.get("suggested_next_action"):
+            st.success(result["suggested_next_action"])
+        with st.expander("Backtest spec", expanded=True):
+            st.json(result.get("backtest_spec") or {})
+        return
+    streaming_tables = {
+        "streaming_pipeline_health": "stages",
+        "streaming_freshness_check": "rows",
+        "streaming_alert_review": "alerts",
+        "streaming_feature_drift": "rows",
+        "streaming_ingestion_lag": "rows",
+        "streaming_topic_inspection": "samples",
+        "streaming_quality_incidents": "incidents",
+    }
+    if result_type == "streaming_symbol_monitor":
+        if result.get("symbol"):
+            st.metric("Symbol", result["symbol"])
+        freshness = result.get("freshness") or []
+        alerts = result.get("alerts") or []
+        if freshness:
+            st.markdown("**Freshness**")
+            st.dataframe(freshness, width="stretch", hide_index=True)
+        if alerts:
+            st.markdown("**Active alerts**")
+            st.dataframe(alerts, width="stretch", hide_index=True)
+        if not freshness and not alerts:
+            st.json(result)
+        return
+    if result_type in streaming_tables:
+        rows = result.get(streaming_tables[result_type]) or []
+        if rows:
+            st.dataframe(rows, width="stretch", hide_index=True)
+        else:
+            st.json(result)
+        return
 
 
 def _readiness_failure_summary(readiness: dict) -> dict:
@@ -442,22 +557,41 @@ def _job_error_message(job: dict, status_payload: dict | None = None) -> str:
 
 
 def _submit_orca_job(prompt: str, symbol: str, horizon_value: str, risk_value: str) -> str | None:
-    if not symbol:
-        return "ORCA API error: select at least one symbol."
     try:
         fetch_health()
         fetch_status()
-        readiness = fetch_readiness([symbol])
-        if not readiness.get("ready"):
-            return _format_readiness_failure(symbol, readiness)
-        job = create_decision_job(_request_payload(prompt, symbol, _horizon_value(horizon_value), _risk_value(risk_value)))
+        response = create_agent_query(
+            {
+                "message": prompt,
+                "context": {
+                    "symbol": symbol or None,
+                    "investment_horizon": _horizon_value(horizon_value),
+                    "risk_tolerance": _risk_value(risk_value),
+                },
+            }
+        )
+        if response.get("status") == "immediate":
+            if response.get("result_type") == "single_symbol_decision":
+                st.session_state.messages.append({"role": "assistant", "type": "decision", "decision": response.get("result") or {}})
+                return None
+            if response.get("result_type"):
+                st.session_state.messages.append({"role": "assistant", "type": "agent_response", "response": response})
+                return None
+            suggestions = response.get("suggested_actions") or []
+            suggestion_lines = "\n".join(f"- {item.get('label', item)}" for item in suggestions[:4])
+            route = response.get("route", "unknown")
+            suffix = f"\n\n**Suggested actions**\n{suggestion_lines}" if suggestion_lines else ""
+            return f"**Route:** `{route}`\n\n{response.get('message', '')}{suffix}"
+        job = response.get("job")
         if not isinstance(job, dict) or not job.get("job_id"):
             return _error_markdown("malformed_response", "ORCA returned job response without job_id.", repr(job))
         job_id = job["job_id"]
+        job_symbol = (response.get("symbols") or [symbol or "N/A"])[0]
         _pending_jobs().append(
             {
                 "job_id": job_id,
-                "symbol": symbol,
+                "symbol": job_symbol,
+                "route": response.get("route"),
                 "prompt": prompt,
                 "created_at": _utc_now().isoformat(),
                 "updated_at": None,
@@ -580,7 +714,7 @@ st.caption("Scenario chat for symbols, horizons, and risk posture. Answers route
 with st.sidebar:
     st.header("ORCA Context")
     st.caption("Frame advisory requests for backend services.")
-    symbol_input = st.text_input("Symbol submitted to ORCA", "NVDA")
+    symbol_input = st.text_input("Default symbol context", "NVDA")
     horizon = st.selectbox("Horizon", ["Intraday", "1-4 weeks", "1-3 months", "6-12 months"], index=1)
     risk = st.select_slider("Risk tolerance", ["Low", "Medium", "High"], value="Medium")
     st.markdown("---")
@@ -603,8 +737,6 @@ backend_status = st.session_state.orca_backend_status
 api_offline = backend_status.get("state") == "Offline"
 
 primary_symbol = _normalize_symbol(symbol_input)
-if not primary_symbol:
-    st.warning("Enter one valid symbol before submitting ORCA advisory job.")
 if api_offline:
     st.error("ORCA API offline. Start backend before submitting advisory jobs.")
 
@@ -617,7 +749,7 @@ sample_prompts = [
     ("Explain recommendation", "Explain the selected symbol recommendation"),
 ]
 for col, (label, sample) in zip(prompt_cols, sample_prompts):
-    if col.button(label, use_container_width=True, disabled=not primary_symbol or api_offline, help=sample):
+    if col.button(label, use_container_width=True, disabled=api_offline, help=sample):
         st.session_state.messages.append({"role": "user", "content": sample})
         with st.spinner("Submitting ORCA advisory job..."):
             reply = _submit_orca_job(sample, primary_symbol, horizon, risk)
@@ -627,7 +759,7 @@ for col, (label, sample) in zip(prompt_cols, sample_prompts):
 
 if st.session_state.submit_retry:
     retry_prompt = st.session_state.submit_retry
-    if st.button("Retry last submit", use_container_width=False, disabled=not primary_symbol or api_offline):
+    if st.button("Retry last submit", use_container_width=False, disabled=api_offline):
         st.session_state.messages.append({"role": "user", "content": retry_prompt})
         with st.spinner("Submitting ORCA advisory job..."):
             reply = _submit_orca_job(retry_prompt, primary_symbol, horizon, risk)
@@ -652,6 +784,8 @@ else:
         with st.chat_message(message["role"]):
             if message.get("type") == "decision":
                 _render_decision(message.get("decision") or {})
+            elif message.get("type") == "agent_response":
+                _render_agent_response(message.get("response") or {})
             else:
                 st.markdown(message.get("content", ""))
 
@@ -660,9 +794,7 @@ if user_prompt := st.chat_input("Ask ORCA about markets or stocks..."):
     with st.chat_message("user"):
         st.markdown(user_prompt)
     reply = None
-    if not primary_symbol:
-        reply = "Select at least one valid watchlist symbol before submitting ORCA advisory job."
-    elif api_offline:
+    if api_offline:
         reply = "ORCA API offline. Start backend before submitting advisory jobs."
     else:
         with st.spinner("Submitting ORCA advisory job..."):
