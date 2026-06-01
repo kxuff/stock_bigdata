@@ -16,7 +16,8 @@ sys.modules.setdefault("psycopg.rows", psycopg_rows_stub)
 sys.modules.setdefault("redis", redis_stub)
 sys.modules.setdefault("rq", rq_stub)
 
-from app.main import app, get_autonomous_agent_service
+from app.infrastructure.storage.agent_route_audit_store import AgentRouteAuditEntry
+from app.main import app, get_agent_route_audit_store, get_autonomous_agent_service
 from app.schemas.agent import AgentQueryResponse
 from app.schemas.enums import AgentRoute
 
@@ -38,6 +39,17 @@ class FakeAutonomousAgentService:
 class FailingAutonomousAgentService:
     def query(self, request):
         raise RuntimeError("agent service failed")
+
+
+class FakeAuditStore:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.entries: list[AgentRouteAuditEntry] = []
+
+    def record(self, entry: AgentRouteAuditEntry) -> None:
+        if self.fail:
+            raise RuntimeError("audit failed")
+        self.entries.append(entry)
 
 
 def _client(service) -> TestClient:
@@ -140,3 +152,68 @@ def test_agent_query_service_exception_returns_500() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 500
+
+
+def test_agent_query_success_creates_audit_entry() -> None:
+    audit_store = FakeAuditStore()
+    app.dependency_overrides[get_autonomous_agent_service] = lambda: FakeAutonomousAgentService()
+    app.dependency_overrides[get_agent_route_audit_store] = lambda: audit_store
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v1/agent/query",
+            headers={"X-Tenant-Id": "tenant-1", "X-User-Id": "user-1"},
+            json={
+                "message": "compare AAPL and MSFT",
+                "context": {"symbols": ["AAPL", "MSFT"], "metadata": {"route": "symbol_comparison", "request_id": "req-1"}},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert len(audit_store.entries) == 1
+    entry = audit_store.entries[0]
+    assert entry.request_id == "req-1"
+    assert entry.tenant_id == "tenant-1"
+    assert entry.user_id == "user-1"
+    assert entry.message_hash != "compare AAPL and MSFT"
+    assert len(entry.message_hash) == 64
+    assert entry.route == "symbol_comparison"
+    assert entry.router_confidence == 0.91
+    assert entry.symbols == ["AAPL", "MSFT"]
+    assert entry.status == "succeeded"
+    assert entry.error_code is None
+
+
+def test_agent_query_service_failure_creates_audit_entry() -> None:
+    audit_store = FakeAuditStore()
+    app.dependency_overrides[get_autonomous_agent_service] = lambda: FailingAutonomousAgentService()
+    app.dependency_overrides[get_agent_route_audit_store] = lambda: audit_store
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
+        response = client.post("/api/v1/agent/query", json={"message": "compare AAPL and MSFT"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    assert len(audit_store.entries) == 1
+    entry = audit_store.entries[0]
+    assert entry.status == "failed"
+    assert entry.error_code == "INTERNAL_ERROR"
+    assert entry.route is None
+
+
+def test_agent_query_audit_store_failure_does_not_break_response() -> None:
+    app.dependency_overrides[get_autonomous_agent_service] = lambda: FakeAutonomousAgentService()
+    app.dependency_overrides[get_agent_route_audit_store] = lambda: FakeAuditStore(fail=True)
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
+        response = client.post(
+            "/api/v1/agent/query",
+            json={"message": "compare AAPL and MSFT", "context": {"metadata": {"route": "symbol_comparison"}}},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200

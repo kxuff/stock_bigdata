@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
 import json
+import logging
+import time
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
@@ -24,10 +27,17 @@ from app.infrastructure.storage.decision_job_store import (
     IdempotencyConflictError,
     PostgresDecisionJobStore,
 )
+from app.infrastructure.storage.agent_route_audit_store import (
+    AgentRouteAuditEntry,
+    AgentRouteAuditStore,
+    NoopAgentRouteAuditStore,
+    PostgresAgentRouteAuditStore,
+)
 from app.infrastructure.queue.decision_job_queue import DecisionJobQueue
 
 
 app = FastAPI(title="Orca Agent Advisory API", version="0.1.0")
+logger = logging.getLogger(__name__)
 
 
 # Dev/first-cut job store only. In-memory dict is not multi-worker safe.
@@ -37,6 +47,8 @@ _job_store: DecisionJobStore | None = None
 _job_store_lock = Lock()
 _job_queue: DecisionJobQueue | None = None
 _job_queue_lock = Lock()
+_agent_route_audit_store: AgentRouteAuditStore | None = None
+_agent_route_audit_store_lock = Lock()
 
 
 def get_decision_service() -> AdvisoryDecisionService:
@@ -74,6 +86,24 @@ def get_decision_job_queue() -> DecisionJobQueue | None:
         if _job_queue is None:
             _job_queue = DecisionJobQueue(settings)
         return _job_queue
+
+
+def get_agent_route_audit_store() -> AgentRouteAuditStore:
+    global _agent_route_audit_store
+    settings = load_settings()
+    if not settings.agent_route_audit_database_url:
+        return NoopAgentRouteAuditStore()
+    with _agent_route_audit_store_lock:
+        if _agent_route_audit_store is None:
+            try:
+                _agent_route_audit_store = PostgresAgentRouteAuditStore(
+                    settings.agent_route_audit_database_url,
+                    table_name=settings.agent_route_audit_table,
+                )
+            except Exception as exc:  # noqa: BLE001 - audit must never block traffic.
+                logger.warning("agent route audit store unavailable: %s", exc)
+                _agent_route_audit_store = NoopAgentRouteAuditStore()
+        return _agent_route_audit_store
 
 
 @app.get("/healthz")
@@ -168,16 +198,41 @@ def create_advisory_decision_job(
 @app.post("/api/v1/agent/query", response_model=AgentQueryResponse)
 def create_agent_query(
     request: AgentQueryRequest,
+    http_request: Request,
     autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
+    audit_store: AgentRouteAuditStore = Depends(get_agent_route_audit_store),
 ) -> AgentQueryResponse:
-    return autonomous_agent_service.query(request)
+    started = time.perf_counter()
+    try:
+        response = autonomous_agent_service.query(request)
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            http_request=http_request,
+            response=response,
+            status="succeeded",
+            latency_ms=_latency_ms(started),
+        )
+        return response
+    except Exception as exc:
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            http_request=http_request,
+            status="failed",
+            error_code=_agent_error_code(exc),
+            latency_ms=_latency_ms(started),
+        )
+        raise
 
 
 @app.post("/api/v1/agent/query-jobs", status_code=status.HTTP_202_ACCEPTED)
 def create_agent_query_job(
     request: AgentQueryRequest,
+    http_request: Request,
     background_tasks: BackgroundTasks,
     autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
+    audit_store: AgentRouteAuditStore = Depends(get_agent_route_audit_store),
 ) -> dict[str, Any]:
     job_id = str(uuid4())
     now = _now_iso()
@@ -197,7 +252,15 @@ def create_agent_query_job(
     }
     with _jobs_lock:
         _jobs[job_id] = job
-    background_tasks.add_task(_run_agent_query_job, job_id, request, autonomous_agent_service)
+    background_tasks.add_task(
+        _run_agent_query_job,
+        job_id,
+        request,
+        autonomous_agent_service,
+        audit_store,
+        http_request.headers.get("X-Tenant-Id"),
+        http_request.headers.get("X-User-Id"),
+    )
     return _job_public(job, include_links=True, base_path="/api/v1/agent/query-jobs")
 
 
@@ -559,7 +622,11 @@ def _run_agent_query_job(
     job_id: str,
     request: AgentQueryRequest,
     autonomous_agent_service: AutonomousAgentService,
+    audit_store: AgentRouteAuditStore,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
 ) -> None:
+    started = time.perf_counter()
     _update_job(job_id, status="running", progress=10, progress_stage="running", started_at=_now_iso())
     try:
         response = autonomous_agent_service.query(request)
@@ -572,6 +639,16 @@ def _run_agent_query_job(
             result=result,
             completed_at=_now_iso(),
         )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            response=response,
+            status="succeeded",
+            latency_ms=_latency_ms(started),
+        )
     except TimeoutError as exc:
         _fail_job(
             job_id,
@@ -580,6 +657,16 @@ def _run_agent_query_job(
             error_code="AGENT_TIMEOUT",
             message=str(exc) or "agent execution timed out",
             recoverable=True,
+        )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            status="failed",
+            error_code="AGENT_TIMEOUT",
+            latency_ms=_latency_ms(started),
         )
     except (DecisionValidationError, ValidationError) as exc:
         _fail_job(
@@ -590,6 +677,16 @@ def _run_agent_query_job(
             message=str(exc),
             recoverable=False,
         )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            status="failed",
+            error_code="VALIDATION_FAILED",
+            latency_ms=_latency_ms(started),
+        )
     except Exception as exc:  # noqa: BLE001 - job surface stores failure for result endpoint.
         _fail_job(
             job_id,
@@ -599,6 +696,72 @@ def _run_agent_query_job(
             message=str(exc) or "agent query job failed",
             recoverable=True,
         )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            status="failed",
+            error_code="INTERNAL_ERROR",
+            latency_ms=_latency_ms(started),
+        )
+
+
+def _record_agent_route_audit(
+    audit_store: AgentRouteAuditStore,
+    *,
+    request: AgentQueryRequest,
+    http_request: Request | None = None,
+    job_id: str | None = None,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
+    response: AgentQueryResponse | None = None,
+    status: str,
+    error_code: str | None = None,
+    latency_ms: int | None = None,
+) -> None:
+    if http_request is not None:
+        tenant_id = http_request.headers.get("X-Tenant-Id")
+        user_id = http_request.headers.get("X-User-Id")
+    route = response.route.value if response is not None else None
+    try:
+        audit_store.record(
+            AgentRouteAuditEntry(
+                audit_id=str(uuid4()),
+                request_id=_agent_request_id(request),
+                job_id=job_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                message_hash=hashlib.sha256(request.message.encode("utf-8")).hexdigest(),
+                route=route,
+                router_confidence=response.router_confidence if response is not None else None,
+                symbols=response.symbols if response is not None else list(request.context.symbols),
+                status=status,
+                error_code=error_code,
+                latency_ms=latency_ms,
+                created_at=_now_iso(),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - audit is best-effort.
+        logger.warning("agent route audit failed: %s", exc)
+
+
+def _agent_request_id(request: AgentQueryRequest) -> str | None:
+    value = request.context.metadata.get("request_id")
+    return value if isinstance(value, str) else None
+
+
+def _agent_error_code(exc: Exception) -> str:
+    if isinstance(exc, TimeoutError):
+        return "AGENT_TIMEOUT"
+    if isinstance(exc, (DecisionValidationError, ValidationError)):
+        return "VALIDATION_FAILED"
+    return "INTERNAL_ERROR"
+
+
+def _latency_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
 
 
 def _fail_job(

@@ -25,6 +25,8 @@ class AgentSettings(BaseModel):
     advisory_output_dir: Path = Path("outputs/advisory_decisions")
     decision_job_database_url: str | None = None
     decision_job_table: str = "orca_decision_jobs"
+    agent_route_audit_database_url: str | None = None
+    agent_route_audit_table: str = "orca_agent_route_audits"
     redis_url: str | None = None
     decision_job_queue: str = "orca-decision-jobs"
     crewai_verbose: bool = False
@@ -139,6 +141,17 @@ def load_settings(env_file: str | Path | None = ".env") -> AgentSettings:
             _read_env("DECISION_JOB_TABLE", values)
             or _read_env("ORCA_DECISION_JOB_TABLE", values)
             or AgentSettings.model_fields["decision_job_table"].default
+        ),
+        agent_route_audit_database_url=(
+            _read_env("AGENT_ROUTE_AUDIT_DATABASE_URL", values)
+            or _read_env("ORCA_AGENT_ROUTE_AUDIT_DATABASE_URL", values)
+            or _read_env("DECISION_JOB_DATABASE_URL", values)
+            or _read_env("ORCA_DECISION_JOB_DATABASE_URL", values)
+        ),
+        agent_route_audit_table=(
+            _read_env("AGENT_ROUTE_AUDIT_TABLE", values)
+            or _read_env("ORCA_AGENT_ROUTE_AUDIT_TABLE", values)
+            or AgentSettings.model_fields["agent_route_audit_table"].default
         ),
         redis_url=_read_env("REDIS_URL", values) or _read_env("ORCA_REDIS_URL", values),
         decision_job_queue=(

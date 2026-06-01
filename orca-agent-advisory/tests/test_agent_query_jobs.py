@@ -16,7 +16,8 @@ sys.modules.setdefault("psycopg.rows", psycopg_rows_stub)
 sys.modules.setdefault("redis", redis_stub)
 sys.modules.setdefault("rq", rq_stub)
 
-from app.main import _jobs, _jobs_lock, _now_iso, app, get_autonomous_agent_service
+from app.infrastructure.storage.agent_route_audit_store import AgentRouteAuditEntry
+from app.main import _jobs, _jobs_lock, _now_iso, app, get_agent_route_audit_store, get_autonomous_agent_service
 from app.schemas.agent import AgentQueryResponse
 from app.schemas.enums import AgentRoute
 
@@ -38,6 +39,17 @@ class FakeAutonomousAgentService:
 class FailingAutonomousAgentService:
     def query(self, request):
         raise RuntimeError("agent service failed")
+
+
+class FakeAuditStore:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.entries: list[AgentRouteAuditEntry] = []
+
+    def record(self, entry: AgentRouteAuditEntry) -> None:
+        if self.fail:
+            raise RuntimeError("audit failed")
+        self.entries.append(entry)
 
 
 def setup_function() -> None:
@@ -121,6 +133,59 @@ def test_agent_query_job_failed_result_returns_error_response() -> None:
     assert payload["status"] == "ERROR"
     assert payload["error_code"] == "INTERNAL_ERROR"
     assert payload["message"] == "agent service failed"
+
+
+def test_agent_query_job_success_creates_audit_entry() -> None:
+    audit_store = FakeAuditStore()
+    app.dependency_overrides[get_agent_route_audit_store] = lambda: audit_store
+    client = _client(FakeAutonomousAgentService())
+
+    create_response = client.post(
+        "/api/v1/agent/query-jobs",
+        headers={"X-Tenant-Id": "tenant-1", "X-User-Id": "user-1"},
+        json=_query_payload(),
+    )
+
+    assert create_response.status_code == 202
+    job_id = create_response.json()["job_id"]
+    assert len(audit_store.entries) == 1
+    entry = audit_store.entries[0]
+    assert entry.job_id == job_id
+    assert entry.tenant_id == "tenant-1"
+    assert entry.user_id == "user-1"
+    assert entry.message_hash != "compare AAPL and MSFT"
+    assert len(entry.message_hash) == 64
+    assert entry.route == "symbol_comparison"
+    assert entry.router_confidence == 0.91
+    assert entry.symbols == ["AAPL", "MSFT"]
+    assert entry.status == "succeeded"
+
+
+def test_agent_query_job_service_failure_creates_audit_entry() -> None:
+    audit_store = FakeAuditStore()
+    app.dependency_overrides[get_agent_route_audit_store] = lambda: audit_store
+    client = _client(FailingAutonomousAgentService())
+
+    create_response = client.post("/api/v1/agent/query-jobs", json=_query_payload())
+
+    assert create_response.status_code == 202
+    assert len(audit_store.entries) == 1
+    entry = audit_store.entries[0]
+    assert entry.status == "failed"
+    assert entry.error_code == "INTERNAL_ERROR"
+
+
+def test_agent_query_job_audit_store_failure_does_not_break_job() -> None:
+    app.dependency_overrides[get_agent_route_audit_store] = lambda: FakeAuditStore(fail=True)
+    client = _client(FakeAutonomousAgentService())
+
+    create_response = client.post("/api/v1/agent/query-jobs", json=_query_payload())
+
+    assert create_response.status_code == 202
+    job_id = create_response.json()["job_id"]
+    result_response = client.get(f"/api/v1/agent/query-jobs/{job_id}/result")
+    assert result_response.status_code == 200
+    assert result_response.json()["route"] == "symbol_comparison"
 
 
 def test_agent_query_job_result_returns_202_while_queued() -> None:
