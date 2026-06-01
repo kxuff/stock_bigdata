@@ -123,7 +123,7 @@ def ensure_tables(spark: SparkSession) -> None:
     
     spark.sql(
         f"""
-        CREATE TABLE IF NOT EXISTS {CATALOG}.bronze.stock_news (
+        CREATE TABLE IF NOT EXISTS {CATALOG}.bronze.stock_news_v2 (
             Datetime timestamp,
             category string,
             event_timestamp long,
@@ -142,7 +142,7 @@ def ensure_tables(spark: SparkSession) -> None:
         )
         USING iceberg
         PARTITIONED BY (days(Datetime))
-        LOCATION 's3a://bronze/stock_news'
+        LOCATION 's3a://bronze/stock_news_v2'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
@@ -302,8 +302,8 @@ if __name__ == "__main__":
             ),
             write_iceberg_stream(
                 news_stream(spark),
-                f"{CATALOG}.bronze.stock_news",
-                f"{CHECKPOINT_BASE}/stock_news",
+                f"{CATALOG}.bronze.stock_news_v2",
+                f"{CHECKPOINT_BASE}/stock_news_v2",
             ),
         ])
         while not stop_requested:
