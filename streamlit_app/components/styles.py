@@ -47,49 +47,39 @@ def inject_global_styles() -> None:
         .ticker-strip {
             display: flex;
             align-items: stretch;
-            overflow-x: auto;
-            border: 1px solid #e5e7eb;
-            border-radius: 2px;
-            background: #ffffff;
+            flex-wrap: wrap;
+            overflow: hidden;
+            border: 1px solid rgba(56, 189, 248, .18);
+            border-radius: 8px;
+            background: linear-gradient(180deg, rgba(17, 24, 39, .98), rgba(15, 23, 42, .94));
             min-height: 96px;
-            box-shadow: none;
+            box-shadow: 0 14px 34px rgba(0, 0, 0, .24);
         }
         .ticker-item {
-            min-width: 205px;
+            flex: 1 1 205px;
+            min-width: 185px;
             padding: .8rem .95rem;
-            border-right: 1px solid #e5e7eb;
-            color: #111827;
+            border-right: 1px solid rgba(148, 163, 184, .16);
+            border-bottom: 1px solid rgba(148, 163, 184, .10);
+            color: #e5e7eb;
         }
         .ticker-name {
-            color: #6b7280;
+            color: #cbd5e1;
             font-size: .74rem;
-            font-weight: 700;
+            font-weight: 800;
             line-height: 1.1;
         }
         .ticker-price {
             margin-top: .45rem;
             font-size: .95rem;
             font-weight: 850;
+            color: #f8fafc;
         }
         .ticker-change {
             margin-top: .22rem;
             font-size: .78rem;
             font-weight: 750;
             white-space: nowrap;
-        }
-        .ticker-flag {
-            display: inline-block;
-            margin-right: .28rem;
-            font-size: .72rem;
-        }
-        .ticker-arrow {
-            min-width: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #1f2937;
-            background: #ffffff;
-            font-size: 1.35rem;
         }
         .stButton > button {
             border-radius: 6px; border: 1px solid rgba(56, 189, 248, .32);

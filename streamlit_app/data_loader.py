@@ -19,7 +19,7 @@ def _c(table: str, name: str) -> str:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_market_overview(limit: int = 8) -> pd.DataFrame:
+def load_market_overview(limit: int = 15) -> pd.DataFrame:
     t = table_sql(INDICATOR_TABLE)
     dt = _c(INDICATOR_TABLE, "Datetime")
     indicator = _c(INDICATOR_TABLE, "Indicator")
@@ -147,7 +147,7 @@ def load_news(symbol: str | None, search: str, limit: int = 200) -> pd.DataFrame
         params["search"] = f"%{search}%"
     where_sql = "where " + " and ".join(where) if where else ""
     sql = f"""
-    select
+    select distinct on ({_c(NEWS_TABLE, "id")})
         {_c(NEWS_TABLE, "Datetime")} as datetime,
         {_c(NEWS_TABLE, "Symbol")} as symbol,
         {_c(NEWS_TABLE, "headline")} as headline,
@@ -157,7 +157,8 @@ def load_news(symbol: str | None, search: str, limit: int = 200) -> pd.DataFrame
         {_c(NEWS_TABLE, "image")} as image
     from {table_sql(NEWS_TABLE)}
     {where_sql}
-    order by {_c(NEWS_TABLE, "event_timestamp")} desc nulls last,
+    order by {_c(NEWS_TABLE, "id")},
+             {_c(NEWS_TABLE, "event_timestamp")} desc nulls last,
              {_c(NEWS_TABLE, "Datetime")} desc
     limit :limit
     """
