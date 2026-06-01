@@ -1,3 +1,5 @@
+import asyncio
+import json
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
@@ -5,7 +7,7 @@ from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Query, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from app.schemas.decision import ErrorResponse, PortfolioDecision, SingleSymbolDecision
@@ -269,6 +271,40 @@ def get_advisory_decision_job_result(job_id: str) -> JSONResponse | dict[str, An
     return job["result"]
 
 
+@app.get("/api/v1/advisory/decision-jobs/{job_id}/events", response_model=None)
+async def stream_advisory_decision_job_events(job_id: str) -> StreamingResponse:
+    async def event_stream():
+        previous_payload = None
+        while True:
+            job = _get_job(job_id)
+            if job is None:
+                yield _sse_event("error", {"error_code": "JOB_NOT_FOUND", "message": "job not found"})
+                return
+
+            public_job = _job_public(job)
+            payload = json.dumps(public_job, separators=(",", ":"), sort_keys=True)
+            if payload != previous_payload:
+                yield _sse_event("status", public_job)
+                previous_payload = payload
+            else:
+                yield _sse_event("heartbeat", {"job_id": job_id, "time": _now_iso()})
+
+            if job.get("status") == "succeeded":
+                yield _sse_event("result", job.get("result") or {})
+                return
+            if job.get("status") == "failed":
+                yield _sse_event("failure", job.get("error") or {})
+                return
+
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/v1/data/readiness")
 def data_readiness(
     symbols: str = Query(..., min_length=1),
@@ -322,6 +358,10 @@ def _error_response(
         missing_tool_results=missing_tool_results or [],
     )
     return JSONResponse(status_code=status_code, content=response.model_dump(mode="json"))
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'), default=str)}\n\n"
 
 
 def _missing_tool_results(message: str) -> list[str]:
@@ -462,6 +502,7 @@ def _job_public(job: dict[str, Any], *, include_links: bool = False) -> dict[str
         payload["links"] = {
             "status": f"/api/v1/advisory/decision-jobs/{job['job_id']}",
             "result": f"/api/v1/advisory/decision-jobs/{job['job_id']}/result",
+            "events": f"/api/v1/advisory/decision-jobs/{job['job_id']}/events",
         }
     return payload
 

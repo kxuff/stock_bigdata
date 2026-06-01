@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import UTC, datetime
-from html import escape
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import streamlit as st
 
-from services.advisory_api import create_decision_job, fetch_health, fetch_readiness, fetch_status, get_decision_job, get_decision_job_result
+from services.advisory_api import create_decision_job, fetch_health, fetch_readiness, fetch_status, stream_decision_job_events
 
 
 st.set_page_config(page_title="AI Chat", page_icon="💬", layout="wide")
@@ -40,109 +39,14 @@ st.markdown(
         border-right: 1px solid rgba(103, 232, 249, 0.18);
     }
 
-    .orca-hero {
-        position: relative;
-        overflow: hidden;
-        padding: 2rem 2.2rem;
-        margin-bottom: 1.2rem;
-        border: 1px solid var(--orca-border);
-        border-radius: 28px;
-        background:
-            linear-gradient(135deg, rgba(6, 78, 59, 0.92), rgba(8, 13, 28, 0.88) 52%, rgba(22, 78, 99, 0.72)),
-            repeating-linear-gradient(90deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 16px);
-        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-    }
-
-    .orca-hero:after {
-        content: "";
-        position: absolute;
-        inset: auto -8% -40% 45%;
-        height: 210px;
-        background: radial-gradient(circle, rgba(103, 232, 249, 0.34), transparent 68%);
-        filter: blur(8px);
-    }
-
-    .orca-eyebrow {
-        color: var(--orca-cyan);
-        font-size: 0.76rem;
-        font-weight: 800;
-        letter-spacing: 0.18em;
-        text-transform: uppercase;
-    }
-
-    .orca-title {
-        margin: 0.25rem 0 0.35rem;
-        color: #f8fafc;
-        font-size: clamp(2.2rem, 5vw, 4.2rem);
-        font-weight: 900;
-        line-height: 0.94;
-        letter-spacing: -0.075em;
-    }
-
-    .orca-subtitle {
-        max-width: 760px;
-        color: #cbd5e1;
-        font-size: 1.02rem;
-        line-height: 1.65;
-    }
-
-    .orca-badge-row { margin-top: 1.1rem; display: flex; flex-wrap: wrap; gap: 0.55rem; }
-    .orca-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.38rem;
-        padding: 0.42rem 0.72rem;
-        border-radius: 999px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        background: rgba(2, 6, 23, 0.42);
-        color: #e2e8f0;
-        font-size: 0.82rem;
-        font-weight: 800;
-    }
-
-    .market-card, .prompt-card {
-        min-height: 126px;
-        padding: 1rem 1.05rem;
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        border-radius: 20px;
-        background: linear-gradient(160deg, rgba(15, 23, 42, 0.88), rgba(8, 47, 73, 0.36));
-        box-shadow: 0 18px 48px rgba(2, 6, 23, 0.26);
-    }
-
-    .market-label {
-        color: var(--orca-muted);
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-    }
-
-    .market-value {
-        margin-top: 0.35rem;
-        color: #f8fafc;
-        font-size: 1.35rem;
-        font-weight: 900;
-    }
-
-    .market-note { margin-top: 0.45rem; color: #a7f3d0; font-size: 0.88rem; }
-
     .section-kicker {
-        margin: 1.25rem 0 0.55rem;
+        margin: 0.8rem 0 0.35rem;
         color: var(--orca-cyan);
         font-weight: 900;
         letter-spacing: 0.14em;
         text-transform: uppercase;
         font-size: 0.76rem;
     }
-
-    .prompt-card {
-        min-height: 88px;
-        border-color: rgba(103, 232, 249, 0.22);
-        background: linear-gradient(150deg, rgba(8, 47, 73, 0.64), rgba(15, 23, 42, 0.86));
-    }
-
-    .prompt-card b { color: #f8fafc; }
-    .prompt-card span { color: var(--orca-muted); font-size: 0.88rem; }
 
     .stButton > button {
         border: 1px solid rgba(103, 232, 249, 0.34);
@@ -203,18 +107,6 @@ def _normalize_symbol(raw_symbol: str) -> str:
     return raw_symbol.strip().upper().replace(".", "-")
 
 
-def _normalize_symbols(raw_symbols: str) -> list[str]:
-    normalized_symbols = []
-    seen_symbols = set()
-    for raw_symbol in raw_symbols.split(","):
-        symbol = _normalize_symbol(raw_symbol)
-        if not symbol or symbol in seen_symbols:
-            continue
-        normalized_symbols.append(symbol)
-        seen_symbols.add(symbol)
-    return normalized_symbols
-
-
 def _format_decision(decision: dict) -> str:
     rationale = decision.get("decision_rationale") or []
     bullets = "\n".join(f"- {item.get('factor', 'Factor')}: {item.get('explanation', '')}" for item in rationale[:4])
@@ -238,6 +130,66 @@ _Not financial advice._
 """
 
 
+def _decision_summary(decision: dict) -> str:
+    return (
+        f"{decision.get('symbol', 'N/A')} · {decision.get('recommendation', 'N/A')} · "
+        f"confidence {decision.get('confidence', 'N/A')}\n\n{decision.get('summary', '')}"
+    )
+
+
+def _render_decision(decision: dict) -> None:
+    symbol = decision.get("symbol", "N/A")
+    recommendation = decision.get("recommendation", "N/A")
+    confidence = decision.get("confidence", "N/A")
+    header_cols = st.columns(3)
+    header_cols[0].metric("Symbol", symbol)
+    header_cols[1].metric("Recommendation", recommendation)
+    header_cols[2].metric("Confidence", confidence)
+    if decision.get("requires_human_review"):
+        st.warning("Human review required before action.")
+    summary = decision.get("summary") or "No summary returned."
+    st.info(summary)
+
+    rationale_rows = []
+    for item in decision.get("decision_rationale") or []:
+        if isinstance(item, dict):
+            rationale_rows.append(
+                {
+                    "Factor": item.get("factor", "Factor"),
+                    "Stance": item.get("stance", "—"),
+                    "Weight": item.get("weight", "—"),
+                    "Explanation": item.get("explanation", ""),
+                }
+            )
+    if rationale_rows:
+        st.table(rationale_rows)
+
+    warnings = decision.get("risk_warnings") or []
+    if warnings:
+        st.error("\n".join(f"• {item}" for item in warnings))
+    else:
+        st.success("No risk warnings returned.")
+
+    support_col, conflict_col = st.columns(2)
+    supporting = decision.get("supporting_signals") or decision.get("supporting_evidence") or []
+    conflicting = decision.get("conflicting_signals") or decision.get("conflicts") or []
+    support_col.write("**Supporting signals**")
+    support_col.write(supporting or "—")
+    conflict_col.write("**Conflicting signals**")
+    conflict_col.write(conflicting or "—")
+
+    with st.expander("Citations / audit"):
+        st.json(
+            {
+                "run_id": decision.get("run_id"),
+                "citations": decision.get("citations") or decision.get("sources") or [],
+                "audit": decision.get("audit") or decision.get("audit_trail") or {},
+            }
+        )
+
+    st.text_area("Copy summary", _decision_summary(decision), height=110, key=f"summary-{decision.get('run_id', uuid4())}")
+
+
 def _readiness_failure_summary(readiness: dict) -> dict:
     failed = {}
     for name, tool in (readiness.get("tools") or {}).items():
@@ -253,6 +205,47 @@ def _readiness_failure_summary(readiness: dict) -> dict:
     if readiness.get("error"):
         failed["provider"] = {"status": "ERROR"}
     return failed
+
+
+def _readiness_failure_rows(readiness: dict) -> list[dict]:
+    rows = []
+    for name, tool in (readiness.get("tools") or {}).items():
+        status_value = tool.get("status")
+        missing_symbols = tool.get("missing_symbols") or []
+        is_stale = (tool.get("freshness") or {}).get("is_stale")
+        if status_value != "SUCCESS" or missing_symbols or is_stale:
+            rows.append(
+                {
+                    "Tool": name,
+                    "Status": status_value or "UNKNOWN",
+                    "Missing symbols": ", ".join(missing_symbols) or "—",
+                    "Stale": "Yes" if is_stale else "No",
+                }
+            )
+    if readiness.get("error"):
+        rows.append({"Tool": "provider", "Status": "ERROR", "Missing symbols": "—", "Stale": "—"})
+    return rows
+
+
+def _format_readiness_failure(symbol: str, readiness: dict) -> str:
+    rows = _readiness_failure_rows(readiness)
+    if not rows:
+        return f"ORCA data not ready for `{symbol}`."
+    table = "| Tool | Status | Missing symbols | Stale |\n|---|---|---|---|\n"
+    table += "\n".join(f"| {row['Tool']} | {row['Status']} | {row['Missing symbols']} | {row['Stale']} |" for row in rows)
+    return f"ORCA data not ready for `{symbol}`.\n\n{table}"
+
+
+def _check_backend() -> dict:
+    try:
+        health = fetch_health()
+        status = fetch_status()
+    except Exception as exc:  # noqa: BLE001 - page must stay usable while API offline.
+        return {"state": "Offline", "health": None, "status": None, "error": _safe_api_error(exc)}
+    health_ok = (health.get("status") or "").lower() in {"ok", "healthy"}
+    status_ok = (status.get("status") or "").lower() in {"ok", "healthy", "ready"}
+    state = "Connected" if health_ok and status_ok else "Degraded"
+    return {"state": state, "health": health, "status": status, "error": None}
 
 
 def _safe_api_error(exc: Exception) -> str:
@@ -272,6 +265,98 @@ def _safe_api_error(exc: Exception) -> str:
     return f"ORCA API error: {exc.__class__.__name__}"
 
 
+def _classify_exception(exc: Exception) -> str:
+    name = exc.__class__.__name__.lower()
+    if "timeout" in name:
+        return "timeout"
+    response = getattr(exc, "response", None)
+    if response is None:
+        return "api_offline"
+    return "api_error"
+
+
+def _extract_error_message(payload: dict) -> str:
+    body = payload.get("body") if isinstance(payload, dict) else None
+    if isinstance(body, dict):
+        return str(body.get("message") or body.get("detail") or body.get("error_code") or "ORCA job failed.")
+    return str(payload.get("message") or payload.get("detail") or payload.get("error_code") or "ORCA job failed.")
+
+
+def _error_markdown(kind: str, message: str, detail: str | None = None) -> str:
+    detail_block = f"\n\n<details><summary>Technical detail</summary>\n\n```text\n{detail}\n```\n</details>" if detail else ""
+    return f"**{kind.replace('_', ' ').title()}**\n\n{message}{detail_block}"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _format_time(value: str | None) -> str:
+    parsed = _parse_iso_datetime(value)
+    if not parsed:
+        return "—"
+    return parsed.strftime("%H:%M:%S UTC")
+
+
+def _format_elapsed(start_value: str | None, end: datetime | None = None) -> str:
+    start = _parse_iso_datetime(start_value)
+    if not start:
+        return "—"
+    seconds = max(0, int(((end or _utc_now()) - start).total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _is_stale_job(job: dict) -> bool:
+    if job.get("status") == "stale":
+        return True
+    created_at = _parse_iso_datetime(job.get("created_at"))
+    if not created_at:
+        return False
+    return job.get("status") in {"queued", "running"} and _utc_now() - created_at > timedelta(hours=1)
+
+
+def _display_status(job: dict) -> str:
+    status = job.get("status", "unknown")
+    if status in {"succeeded", "success"}:
+        status = "completed"
+    return "stale" if _is_stale_job(job) else status
+
+
+def _format_progress(job: dict) -> str:
+    stage = job.get("progress_stage") or job.get("status") or "Progress"
+    pct = job.get("progress_pct")
+    if pct is None:
+        return str(stage)
+    return f"{stage} · {pct}%"
+
+
+def _status_icon(status: str) -> str:
+    return {"queued": "🕓", "running": "🔄", "completed": "✅", "failed": "❌", "stale": "⚠️"}.get(status, "•")
+
+
+def _truncate(value: str | None, limit: int = 64) -> str:
+    text = value or "—"
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
 def _pending_jobs() -> list[dict]:
     if "pending_orca_jobs" not in st.session_state:
         st.session_state.pending_orca_jobs = _load_pending_jobs_from_query()
@@ -289,7 +374,18 @@ def _load_pending_jobs_from_query() -> list[dict]:
         return []
     if not isinstance(jobs, list):
         return []
-    return [job for job in jobs if isinstance(job, dict) and job.get("job_id")]
+    safe_jobs = []
+    for job in jobs:
+        if isinstance(job, dict) and job.get("job_id"):
+            safe_jobs.append(
+                {
+                    "job_id": job.get("job_id"),
+                    "symbol": job.get("symbol"),
+                    "created_at": job.get("created_at"),
+                    "status": job.get("status", "queued"),
+                }
+            )
+    return safe_jobs
 
 
 def _sync_pending_jobs_to_query() -> None:
@@ -302,7 +398,6 @@ def _sync_pending_jobs_to_query() -> None:
         {
             "job_id": job.get("job_id"),
             "symbol": job.get("symbol"),
-            "prompt": job.get("prompt"),
             "created_at": job.get("created_at"),
             "status": job.get("status"),
         }
@@ -316,6 +411,13 @@ def _append_assistant_message_once(message_id: str, content: str) -> None:
     if message_id in st.session_state.completed_orca_message_ids:
         return
     st.session_state.messages.append({"role": "assistant", "content": content})
+    st.session_state.completed_orca_message_ids.add(message_id)
+
+
+def _append_decision_once(message_id: str, decision: dict) -> None:
+    if message_id in st.session_state.completed_orca_message_ids:
+        return
+    st.session_state.messages.append({"role": "assistant", "type": "decision", "decision": decision})
     st.session_state.completed_orca_message_ids.add(message_id)
 
 
@@ -339,7 +441,7 @@ def _job_error_message(job: dict, status_payload: dict | None = None) -> str:
 """
 
 
-def _submit_orca_job(prompt: str, symbol: str, horizon_value: str, risk_value: str) -> str:
+def _submit_orca_job(prompt: str, symbol: str, horizon_value: str, risk_value: str) -> str | None:
     if not symbol:
         return "ORCA API error: select at least one symbol."
     try:
@@ -347,57 +449,89 @@ def _submit_orca_job(prompt: str, symbol: str, horizon_value: str, risk_value: s
         fetch_status()
         readiness = fetch_readiness([symbol])
         if not readiness.get("ready"):
-            return f"ORCA data not ready for {symbol}. Blocking checks: `{_readiness_failure_summary(readiness)}`"
+            return _format_readiness_failure(symbol, readiness)
         job = create_decision_job(_request_payload(prompt, symbol, _horizon_value(horizon_value), _risk_value(risk_value)))
+        if not isinstance(job, dict) or not job.get("job_id"):
+            return _error_markdown("malformed_response", "ORCA returned job response without job_id.", repr(job))
         job_id = job["job_id"]
         _pending_jobs().append(
             {
                 "job_id": job_id,
                 "symbol": symbol,
                 "prompt": prompt,
-                "created_at": datetime.now(UTC).isoformat(),
+                "created_at": _utc_now().isoformat(),
+                "updated_at": None,
                 "status": job.get("status", "queued"),
+                "result_fetched": False,
+                "events_complete": False,
             }
         )
         _sync_pending_jobs_to_query()
-        return f"ORCA job `{job_id}` queued for `{symbol}`. Use pending job controls below to refresh or fetch result."
+        return None
     except Exception as exc:  # noqa: BLE001 - UI must show API failure, no fake content.
-        return _safe_api_error(exc)
+        kind = _classify_exception(exc)
+        return _error_markdown(kind, _safe_api_error(exc), repr(exc))
 
 
-def _refresh_job_status(job: dict) -> None:
+def _apply_status_event(job: dict, payload: dict) -> None:
+    job.update(
+        {
+            "status": payload.get("status", job.get("status", "unknown")),
+            "progress_stage": payload.get("progress_stage"),
+            "progress_pct": payload.get("progress"),
+            "run_id": payload.get("run_id", job.get("run_id")),
+            "updated_at": payload.get("updated_at") or _utc_now().isoformat(),
+        }
+    )
+    if _display_status(job) == "stale":
+        job["status"] = "stale"
+
+
+def _stream_job_events(job: dict) -> None:
     try:
-        status_payload = get_decision_job(job["job_id"])
-        job.update(
-            {
-                "status": status_payload.get("status", job.get("status", "unknown")),
-                "progress_stage": status_payload.get("progress_stage"),
-                "progress_pct": status_payload.get("progress_pct"),
-                "updated_at": datetime.now(UTC).isoformat(),
-            }
-        )
-        _sync_pending_jobs_to_query()
-        if job["status"] == "failed":
-            _append_assistant_message_once(f"{job['job_id']}:failed", _job_error_message(job, status_payload))
-            _remove_pending_job(job["job_id"])
-    except Exception as exc:  # noqa: BLE001 - status refresh should not crash UI.
-        st.error(_safe_api_error(exc))
-
-
-def _fetch_job_result(job: dict) -> None:
-    try:
-        result_status, result = get_decision_job_result(job["job_id"])
-        if result_status == 202:
-            job["status"] = result.get("status", job.get("status", "running"))
-            job["updated_at"] = datetime.now(UTC).isoformat()
-            _sync_pending_jobs_to_query()
-            st.info(f"ORCA job `{job['job_id']}` still `{job['status']}`.")
+        if not job.get("job_id"):
+            job["status"] = "failed"
+            job["error_message"] = "Missing job_id."
             return
-        _append_assistant_message_once(f"{job['job_id']}:result", _format_decision(result))
-        _remove_pending_job(job["job_id"])
-        st.rerun()
-    except Exception as exc:  # noqa: BLE001 - result fetch should not crash UI.
+        for event in stream_decision_job_events(job["job_id"]):
+            event_type = event.get("event")
+            data = event.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            if event_type == "status":
+                _apply_status_event(job, data)
+            elif event_type == "result":
+                _append_decision_once(f"{job['job_id']}:result", data)
+                job["status"] = "completed"
+                job["result_fetched"] = True
+                job["events_complete"] = True
+                job["updated_at"] = _utc_now().isoformat()
+                break
+            elif event_type in {"failure", "error"}:
+                job["status"] = "failed"
+                job["error"] = data
+                job["error_message"] = _extract_error_message(data)
+                job["events_complete"] = True
+                job["updated_at"] = _utc_now().isoformat()
+                _append_assistant_message_once(f"{job['job_id']}:failed", _job_error_message(job, {"error": data, "status": "failed"}))
+                break
+        _sync_pending_jobs_to_query()
+    except Exception as exc:  # noqa: BLE001 - status refresh should not crash UI.
+        job["status"] = "failed"
+        job["error_message"] = _safe_api_error(exc)
         st.error(_safe_api_error(exc))
+
+
+def _retry_job(job: dict, horizon_value: str, risk_value: str) -> None:
+    prompt = job.get("prompt")
+    symbol = job.get("symbol")
+    if not prompt or not symbol:
+        st.warning("Retry unavailable after reload because prompt is kept only in session.")
+        return
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    reply = _submit_orca_job(prompt, symbol, horizon_value, risk_value)
+    if reply:
+        st.session_state.messages.append({"role": "assistant", "content": reply})
 
 
 def _render_pending_jobs() -> None:
@@ -405,127 +539,144 @@ def _render_pending_jobs() -> None:
     if not jobs:
         return
 
-    st.markdown('<div class="section-kicker">Pending ORCA jobs</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-kicker">ORCA jobs</div>', unsafe_allow_html=True)
+
     for job in list(jobs):
-        with st.container(border=True):
-            st.markdown(
-                f"**{job.get('symbol', 'N/A')}** · status `{job.get('status', 'unknown')}` · job `{job.get('job_id', 'N/A')}`"
-            )
-            st.caption(f"Prompt: {job.get('prompt', '')}")
-            st.caption(f"Created: {job.get('created_at', 'N/A')}")
-            if job.get("progress_stage") or job.get("progress_pct") is not None:
-                st.caption(f"Progress: {job.get('progress_stage') or 'N/A'} · {job.get('progress_pct', 'N/A')}%")
-
-            refresh_col, fetch_col = st.columns(2)
-            if refresh_col.button("Refresh status", key=f"refresh-{job['job_id']}", use_container_width=True):
-                _refresh_job_status(job)
+        status = _display_status(job)
+        cols = st.columns([1.15, 0.8, 1.1, 0.9, 0.9, 1.0, 0.8, 0.8], vertical_alignment="center")
+        cols[0].markdown(f"**{job.get('symbol', 'N/A')}** `{job.get('job_id', 'N/A')}`")
+        cols[1].markdown(f"{_status_icon(status)} `{status}`")
+        cols[2].caption(_truncate(job.get("prompt"), 56))
+        cols[3].caption(f"Created {_format_time(job.get('created_at'))}")
+        cols[4].caption(f"Refreshed {_format_time(job.get('updated_at'))}")
+        cols[5].caption(f"Elapsed {_format_elapsed(job.get('created_at'))} · {_format_progress(job)}")
+        if status in {"failed", "stale", "completed"}:
+            if status in {"failed", "stale"} and cols[6].button("Retry", key=f"retry-{job['job_id']}", use_container_width=True):
+                _retry_job(job, horizon, risk)
                 st.rerun()
-            if fetch_col.button("Fetch result", key=f"fetch-{job['job_id']}", use_container_width=True):
-                _fetch_job_result(job)
+            if cols[7].button("Remove", key=f"remove-{job['job_id']}", use_container_width=True):
+                _remove_pending_job(job["job_id"])
+                st.rerun()
 
-st.markdown(
-    """
-    <div class="orca-hero">
-      <div class="orca-eyebrow">ORCA market intelligence · production cockpit</div>
-      <div class="orca-title">Ask sharper.<br/>Trade calmer.</div>
-      <div class="orca-subtitle">
-        Scenario chat for symbols, horizons, and risk posture. Answers route through production ORCA API.
-      </div>
-      <div class="orca-badge-row">
-        <span class="orca-badge">● Production API</span>
-        <span class="orca-badge">CrewAI advisory jobs</span>
-        <span class="orca-badge">Market copilot</span>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-with st.sidebar:
-    st.header("ORCA Context")
-    st.caption("Frame advisory requests for backend services.")
-    symbols = st.text_input("Watchlist symbols", "NVDA, MSFT, LLY")
-    horizon = st.selectbox("Horizon", ["Intraday", "1-4 weeks", "1-3 months", "6-12 months"], index=1)
-    risk = st.select_slider("Risk tolerance", ["Low", "Medium", "High"], value="Medium")
-    st.markdown("---")
-    st.markdown("<span style='color:#67e8f9;font-weight:800'>● Production mode</span>", unsafe_allow_html=True)
-    st.caption("Prompts create bounded async advisory jobs.")
+        if status in {"queued", "running"} and not job.get("events_complete"):
+            with st.spinner(f"Listening for ORCA job {job.get('job_id')} events..."):
+                _stream_job_events(job)
+            st.rerun()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "completed_orca_message_ids" not in st.session_state:
     st.session_state.completed_orca_message_ids = set()
+if "submit_retry" not in st.session_state:
+    st.session_state.submit_retry = None
+if "orca_backend_status" not in st.session_state:
+    st.session_state.orca_backend_status = _check_backend()
 _pending_jobs()
+_sync_pending_jobs_to_query()
 
-symbol_list = _normalize_symbols(symbols)
-symbol_display = ", ".join(symbol_list) or "No symbols"
-primary_symbol = symbol_list[0] if symbol_list else ""
-if len(symbol_list) > 1:
-    primary_symbol = st.selectbox("Symbol submitted to ORCA", symbol_list)
-else:
-    st.selectbox("Symbol submitted to ORCA", symbol_list or ["No valid symbol"], disabled=not symbol_list)
-st.caption("Only selected primary symbol is submitted for single-symbol advisory.")
+st.title("AI Chat")
+st.caption("Scenario chat for symbols, horizons, and risk posture. Answers route through production ORCA API.")
+
+with st.sidebar:
+    st.header("ORCA Context")
+    st.caption("Frame advisory requests for backend services.")
+    symbol_input = st.text_input("Symbol submitted to ORCA", "NVDA")
+    horizon = st.selectbox("Horizon", ["Intraday", "1-4 weeks", "1-3 months", "6-12 months"], index=1)
+    risk = st.select_slider("Risk tolerance", ["Low", "Medium", "High"], value="Medium")
+    st.markdown("---")
+    if st.button("Refresh backend", use_container_width=True):
+        st.session_state.orca_backend_status = _check_backend()
+        st.rerun()
+    backend_state = st.session_state.get("orca_backend_status", {}).get("state", "Offline")
+    if backend_state == "Connected":
+        st.success("Connected")
+    elif backend_state == "Degraded":
+        st.warning("Degraded")
+    else:
+        st.error("Offline")
+    backend_error = st.session_state.get("orca_backend_status", {}).get("error")
+    if backend_error:
+        st.caption(backend_error)
+    st.caption("Prompts create bounded async advisory jobs.")
+
+backend_status = st.session_state.orca_backend_status
+api_offline = backend_status.get("state") == "Offline"
+
+primary_symbol = _normalize_symbol(symbol_input)
 if not primary_symbol:
-    st.warning("Enter at least one valid watchlist symbol before submitting ORCA advisory job.")
-
-summary_cols = st.columns([1.25, 1, 1])
-summary_cards = [
-    ("Active symbols", escape(symbol_display), "Universe checked for data readiness"),
-    ("Time horizon", escape(horizon), "Answer lens for setup and catalysts"),
-    ("Risk posture", escape(risk), "Controls sizing tone and caution flags"),
-]
-for col, (label, value, note) in zip(summary_cols, summary_cards):
-    col.markdown(
-        f"""
-        <div class="market-card">
-          <div class="market-label">{label}</div>
-          <div class="market-value">{value}</div>
-          <div class="market-note">{note}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.warning("Enter one valid symbol before submitting ORCA advisory job.")
+if api_offline:
+    st.error("ORCA API offline. Start backend before submitting advisory jobs.")
 
 st.markdown('<div class="section-kicker">Launch questions</div>', unsafe_allow_html=True)
 
 prompt_cols = st.columns(3)
 sample_prompts = [
-    ("Single-symbol setup", "Analyze the selected symbol setup", "Trend, catalysts, risk."),
-    ("Risk audit", "Show risks for the selected symbol", "Position sizing and watch items."),
-    ("Decision rationale", "Explain the selected symbol recommendation", "Signals, conflicts, confidence."),
+    ("Analyze setup", "Analyze the selected symbol setup"),
+    ("Show risks", "Show risks for the selected symbol"),
+    ("Explain recommendation", "Explain the selected symbol recommendation"),
 ]
-for col, (label, sample, detail) in zip(prompt_cols, sample_prompts):
-    col.markdown(
-        f"""
-        <div class="prompt-card">
-          <b>{label}</b><br/>
-          <span>{detail}</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    if col.button(sample, use_container_width=True, disabled=not primary_symbol):
+for col, (label, sample) in zip(prompt_cols, sample_prompts):
+    if col.button(label, use_container_width=True, disabled=not primary_symbol or api_offline, help=sample):
         st.session_state.messages.append({"role": "user", "content": sample})
         with st.spinner("Submitting ORCA advisory job..."):
-            st.session_state.messages.append({"role": "assistant", "content": _submit_orca_job(sample, primary_symbol, horizon, risk)})
+            reply = _submit_orca_job(sample, primary_symbol, horizon, risk)
+            if reply:
+                st.session_state.messages.append({"role": "assistant", "content": reply})
+        st.rerun()
+
+if st.session_state.submit_retry:
+    retry_prompt = st.session_state.submit_retry
+    if st.button("Retry last submit", use_container_width=False, disabled=not primary_symbol or api_offline):
+        st.session_state.messages.append({"role": "user", "content": retry_prompt})
+        with st.spinner("Submitting ORCA advisory job..."):
+            reply = _submit_orca_job(retry_prompt, primary_symbol, horizon, risk)
+            if reply:
+                st.session_state.messages.append({"role": "assistant", "content": reply})
+        st.session_state.submit_retry = None
+        st.rerun()
 
 _render_pending_jobs()
 
-st.markdown('<div class="section-kicker">Conversation tape</div>', unsafe_allow_html=True)
+conversation_col, clear_col = st.columns([1, 0.18], vertical_alignment="center")
+conversation_col.markdown('<div class="section-kicker">Conversation tape</div>', unsafe_allow_html=True)
+if clear_col.button("Clear chat", use_container_width=True):
+    st.session_state.messages = []
+    st.session_state.completed_orca_message_ids = set()
+    st.rerun()
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+if not st.session_state.messages:
+    st.info("No conversation yet. Choose a launch question or ask ORCA below.")
+else:
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            if message.get("type") == "decision":
+                _render_decision(message.get("decision") or {})
+            else:
+                st.markdown(message.get("content", ""))
 
 if user_prompt := st.chat_input("Ask ORCA about markets or stocks..."):
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
+    reply = None
     if not primary_symbol:
         reply = "Select at least one valid watchlist symbol before submitting ORCA advisory job."
+    elif api_offline:
+        reply = "ORCA API offline. Start backend before submitting advisory jobs."
     else:
         with st.spinner("Submitting ORCA advisory job..."):
             reply = _submit_orca_job(user_prompt, primary_symbol, horizon, risk)
-    st.session_state.messages.append({"role": "assistant", "content": reply})
-    with st.chat_message("assistant"):
-        st.markdown(reply)
+            if reply and (
+                "**Api Offline**" in reply
+                or "**Timeout**" in reply
+                or "**Malformed Response**" in reply
+                or "**Api Error**" in reply
+            ):
+                st.session_state.submit_retry = user_prompt
+    if reply:
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+    else:
+        st.rerun()
