@@ -36,6 +36,8 @@ Local Streamlit config options:
 | `ML_INFERENCE_PREDICTIONS_PATH` | Optional direct path to `predictions.parquet`. |
 | `ML_INFERENCE_MANIFEST_PATH` | Optional direct path to `inference_manifest.json`. |
 | `US_STOCK_EOD_DATA_DIR` | EOD batch data directory used to discover the latest `staging/*/inference_manifest.json`. |
+| `ML_INFERENCE_AUTO_REFRESH` | Defaults to `true`. When local output for the latest completed US market session is missing, Streamlit runs the local EOD/ML pipeline before rendering picks. |
+| `ML_INFERENCE_PIPELINE_TIMEOUT_SECONDS` | Auto-refresh subprocess timeout. Defaults to `1800`. |
 
 If the DAG runs on a US market holiday and yfinance returns no new daily bar, the feature task raises an Airflow skip so stale rows are not re-scored.
 

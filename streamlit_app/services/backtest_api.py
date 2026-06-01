@@ -116,7 +116,7 @@ def run_strategy_backtest(
         horizon_days=horizon_days,
     )
     equity_curve = _build_equity_curve(trades, spy_close, test_start, end_date)
-    metrics = _build_metrics(trades, spy_close, test_start)
+    metrics = _build_metrics(trades, equity_curve)
     exit_counts = trades["Exit_Reason"].value_counts() if not trades.empty else pd.Series(dtype=int)
     return StrategyBacktestResult(trades=trades, equity_curve=equity_curve, metrics=metrics, exit_reason_counts=exit_counts)
 
@@ -264,33 +264,43 @@ def _build_equity_curve(df_trades: pd.DataFrame, spy_close: pd.Series, test_star
         trades["Entry_Date"] = pd.to_datetime(trades["Entry_Date"])
         trades["Exit_Date"] = pd.to_datetime(trades["Exit_Date"])
 
-        for current_day in trading_days:
-            active = trades[(trades["Entry_Date"] <= current_day) & (trades["Exit_Date"] >= current_day)]
-            if active.empty:
+        daily_slices: dict[pd.Timestamp, list[float]] = {day: [] for day in trading_days}
+        for _, trade in trades.iterrows():
+            entry_date = pd.Timestamp(trade["Entry_Date"]).normalize()
+            exit_date = pd.Timestamp(trade["Exit_Date"]).normalize()
+            active_days = trading_days[(trading_days > entry_date) & (trading_days <= exit_date)]
+            if active_days.empty:
+                active_days = trading_days[trading_days == exit_date]
+            if active_days.empty:
                 continue
-            daily_returns = []
-            for _, trade in active.iterrows():
-                holding_days = max((trade["Exit_Date"] - trade["Entry_Date"]).days, 1)
-                daily_returns.append((float(trade["Return_pct"]) / 100) / holding_days)
-            portfolio_daily_returns.loc[current_day] = float(np.mean(daily_returns))
+
+            daily_return = (float(trade["Return_pct"]) / 100) / len(active_days)
+            for active_day in active_days:
+                daily_slices[active_day].append(daily_return)
+
+        for day, slices in daily_slices.items():
+            if slices:
+                portfolio_daily_returns.loc[day] = float(np.mean(slices))
 
     strategy_equity = (1 + portfolio_daily_returns).cumprod() - 1
     spy_equity = (1 + spy_slice.pct_change().fillna(0)).cumprod() - 1
     return pd.DataFrame({"Strategy": strategy_equity, "SPY": spy_equity}, index=trading_days)
 
 
-def _build_metrics(df_trades: pd.DataFrame, spy_close: pd.Series, test_start: str) -> dict[str, Any]:
-    spy_slice = spy_close.loc[test_start:].dropna()
+def _build_metrics(df_trades: pd.DataFrame, equity_curve: pd.DataFrame) -> dict[str, Any]:
+    strategy_total_return = 0.0
     spy_total_return = np.nan
-    if len(spy_slice) >= 2:
-        spy_total_return = (float(spy_slice.iloc[-1]) - float(spy_slice.iloc[0])) / float(spy_slice.iloc[0]) * 100
+    if not equity_curve.empty:
+        strategy_total_return = float(equity_curve["Strategy"].iloc[-1] * 100)
+        spy_total_return = float(equity_curve["SPY"].iloc[-1] * 100)
 
     if df_trades.empty:
         return {
             "trade_count": 0,
             "win_rate": np.nan,
             "avg_return_per_trade": np.nan,
-            "raw_strategy_return": 0.0,
+            "strategy_total_return": strategy_total_return,
+            "raw_trade_return_sum": 0.0,
             "spy_total_return": spy_total_return,
         }
 
@@ -298,7 +308,8 @@ def _build_metrics(df_trades: pd.DataFrame, spy_close: pd.Series, test_start: st
         "trade_count": int(len(df_trades)),
         "win_rate": float((df_trades["Return_pct"] > 0).mean() * 100),
         "avg_return_per_trade": float(df_trades["Return_pct"].mean()),
-        "raw_strategy_return": float(df_trades["Return_pct"].sum()),
+        "strategy_total_return": strategy_total_return,
+        "raw_trade_return_sum": float(df_trades["Return_pct"].sum()),
         "spy_total_return": spy_total_return,
     }
 
