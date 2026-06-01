@@ -77,7 +77,7 @@ def _context_symbols(request: AgentQueryRequest) -> list[str]:
 
 
 def _extract_symbols(message: str) -> list[str]:
-    ignored = {"I", "A", "THE", "AND", "OR", "FOR", "API", "SQL", "HTML", "CSS", "JSON", "CSV"}
+    ignored = {"I", "A", "THE", "AND", "OR", "FOR", "API", "SQL", "HTML", "CSS", "JSON", "CSV", "ORCA"}
     return [symbol for symbol in re.findall(r"(?<![A-Za-z0-9])([A-Z]{1,5}(?:-[A-Z])?)(?![A-Za-z0-9])", message) if symbol not in ignored]
 
 

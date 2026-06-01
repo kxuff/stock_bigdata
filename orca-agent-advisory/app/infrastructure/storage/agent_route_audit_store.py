@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+import json
 
 import psycopg
+
+try:
+    from psycopg.types.json import Jsonb
+except Exception:  # noqa: BLE001 - tests may stub psycopg without subpackages.
+    Jsonb = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -93,7 +99,7 @@ class PostgresAgentRouteAuditStore(AgentRouteAuditStore):
                     "message_hash": entry.message_hash,
                     "route": entry.route,
                     "router_confidence": entry.router_confidence,
-                    "symbols": entry.symbols,
+                    "symbols": Jsonb(entry.symbols) if Jsonb is not None else json.dumps(entry.symbols),
                     "status": entry.status,
                     "error_code": entry.error_code,
                     "latency_ms": entry.latency_ms,

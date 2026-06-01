@@ -1,4 +1,5 @@
 from app.application.use_cases.route_services import AgentRouteServices
+from app.application.services.agent_query_router_service import _extract_symbols
 from app.application.use_cases.streaming_route_services import StreamingRouteServices
 from app.application.ports.backtest_provider import BacktestProviderResult, BacktestRequest
 from app.application.ports.portfolio_provider import InMemoryPortfolioProvider
@@ -90,6 +91,10 @@ def test_symbol_comparison_enriches_rows_and_tolerates_missing_values() -> None:
     assert rows[0]["as_of"] == "2026-01-02"
     assert rows[1]["status"] == "warning"
     assert "missing latest_price" in rows[1]["warnings"]
+
+
+def test_symbol_extraction_ignores_orca_product_name() -> None:
+    assert _extract_symbols("Compare AAPL and MSFT using latest ORCA predictions") == ["AAPL", "MSFT"]
 
 
 def test_watchlist_review_includes_enriched_fields_for_null_columns() -> None:
