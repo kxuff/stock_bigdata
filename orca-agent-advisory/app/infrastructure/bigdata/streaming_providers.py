@@ -164,3 +164,64 @@ def _lag_minutes(value: str | None) -> float | None:
         return round((datetime.now(timezone.utc) - dt).total_seconds() / 60, 2)
     except ValueError:
         return None
+
+
+@dataclass
+class KafkaTopicMetadataInspectionProvider:
+    bootstrap_servers: str
+    allowed_topics: list[str]
+    consumer_group: str | None = None
+    timeout_seconds: float = 5.0
+    sample_enabled: bool = False
+    sample_max_bytes: int = 512
+
+    def is_available(self) -> bool:
+        try:
+            import confluent_kafka  # noqa: F401
+
+            return bool(self.bootstrap_servers and self.allowed_topics)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def inspect_topics(self, topics: list[str] | None = None) -> list[dict[str, Any]]:
+        requested = topics or self.allowed_topics
+        rejected = [topic for topic in requested if topic not in set(self.allowed_topics)]
+        if rejected:
+            return [{"topic": topic, "status": "rejected", "error": "Topic not in Kafka inspection allowlist."} for topic in rejected]
+        if not self.bootstrap_servers or not self.allowed_topics:
+            return [{"topic": "kafka", "status": "unavailable", "limitation": "Kafka inspection not configured."}]
+        try:
+            from confluent_kafka import Consumer, KafkaException, TopicPartition  # type: ignore[import-not-found]
+            from confluent_kafka.admin import AdminClient  # type: ignore[import-not-found]
+        except Exception as exc:  # noqa: BLE001
+            return [{"topic": topic, "status": "unavailable", "error": str(exc), "limitation": "Kafka client library unavailable."} for topic in requested]
+
+        try:
+            admin = AdminClient({"bootstrap.servers": self.bootstrap_servers, "socket.timeout.ms": int(self.timeout_seconds * 1000), "request.timeout.ms": int(self.timeout_seconds * 1000)})
+            metadata = admin.list_topics(timeout=self.timeout_seconds)
+            consumer = Consumer({"bootstrap.servers": self.bootstrap_servers, "group.id": self.consumer_group or "orca-topic-inspection-readonly", "enable.auto.commit": False, "default.topic.config": {"auto.offset.reset": "latest"}})
+            rows: list[dict[str, Any]] = []
+            for topic in requested:
+                topic_meta = metadata.topics.get(topic)
+                if topic_meta is None or topic_meta.error is not None:
+                    rows.append({"topic": topic, "status": "error", "error": str(topic_meta.error) if topic_meta else "Topic metadata not found."})
+                    continue
+                latest_offsets: dict[str, int] = {}
+                lag: dict[str, int | None] | None = {} if self.consumer_group else None
+                for partition_id in sorted(topic_meta.partitions):
+                    tp = TopicPartition(topic, partition_id)
+                    _low, high = consumer.get_watermark_offsets(tp, timeout=self.timeout_seconds, cached=False)
+                    latest_offsets[str(partition_id)] = int(high)
+                    if lag is not None:
+                        committed = consumer.committed([tp], timeout=self.timeout_seconds)[0].offset
+                        lag[str(partition_id)] = None if committed < 0 else max(int(high) - int(committed), 0)
+                rows.append({"topic": topic, "status": "ok", "partition_count": len(topic_meta.partitions), "latest_offsets": latest_offsets, "consumer_lag": lag, "sample": self._sample_disabled()})
+            consumer.close()
+            return rows
+        except (KafkaException, Exception) as exc:  # noqa: BLE001
+            return [{"topic": topic, "status": "error", "error": str(exc), "limitation": "Kafka inspection failed soft."} for topic in requested]
+
+    def _sample_disabled(self) -> dict[str, Any]:
+        if not self.sample_enabled:
+            return {}
+        return {"status": "disabled", "limitation": "Kafka sampling disabled for production safety; metadata inspection only."}

@@ -60,8 +60,11 @@ class StreamingRouteServices:
 
     def topic_inspection(self, route: RoutedAgentQuery) -> AgentQueryResponse:
         provider = self.topic_inspection_provider or self.observability_provider
-        samples = provider.inspect_topics() if hasattr(provider, "inspect_topics") else []
-        result = StreamingTopicInspectionResult(samples=[StreamingTopicSample(**_pick(row, {"topic", "status", "sample", "limitation", "error"})) for row in samples])
+        try:
+            samples = provider.inspect_topics() if hasattr(provider, "inspect_topics") else []
+        except Exception as exc:  # noqa: BLE001
+            samples = [{"topic": "kafka", "status": "error", "error": str(exc), "limitation": "Kafka direct topic inspection failed soft."}]
+        result = StreamingTopicInspectionResult(samples=[StreamingTopicSample(**_pick(row, {"topic", "status", "partition_count", "latest_offsets", "consumer_lag", "sample", "limitation", "error"})) for row in samples])
         return _response(route, "streaming_topic_inspection", result.model_dump())
 
     def quality_incidents(self, route: RoutedAgentQuery) -> AgentQueryResponse:

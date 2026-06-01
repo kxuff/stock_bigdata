@@ -33,6 +33,12 @@ class AgentSettings(BaseModel):
     crewai_tracing: bool = True
     crewai_share_crew: bool = False
     tool_result_provider: str = "bigdata"
+    kafka_bootstrap_servers: str | None = None
+    kafka_allowed_topics: list[str] = Field(default_factory=list)
+    kafka_consumer_group: str | None = None
+    kafka_inspection_timeout_seconds: float = Field(default=5.0, gt=0)
+    kafka_sample_enabled: bool = False
+    kafka_sample_max_bytes: int = Field(default=512, ge=0, le=4096)
 
     @field_validator("deepseek_base_url", "deepseek_model")
     @classmethod
@@ -179,6 +185,12 @@ def load_settings(env_file: str | Path | None = ".env") -> AgentSettings:
             or _read_env("ORCA_TOOL_RESULT_PROVIDER", values)
             or AgentSettings.model_fields["tool_result_provider"].default
         ),
+        kafka_bootstrap_servers=_read_env("KAFKA_BOOTSTRAP_SERVERS", values) or _read_env("ORCA_KAFKA_BOOTSTRAP_SERVERS", values),
+        kafka_allowed_topics=_read_csv_env("KAFKA_ALLOWED_TOPICS", values) or _read_csv_env("ORCA_KAFKA_ALLOWED_TOPICS", values),
+        kafka_consumer_group=_read_env("KAFKA_CONSUMER_GROUP", values) or _read_env("ORCA_KAFKA_CONSUMER_GROUP", values),
+        kafka_inspection_timeout_seconds=float(_read_env("KAFKA_INSPECTION_TIMEOUT_SECONDS", values) or _read_env("ORCA_KAFKA_INSPECTION_TIMEOUT_SECONDS", values) or AgentSettings.model_fields["kafka_inspection_timeout_seconds"].default),
+        kafka_sample_enabled=_read_bool_env("KAFKA_SAMPLE_ENABLED", values, default=AgentSettings.model_fields["kafka_sample_enabled"].default),
+        kafka_sample_max_bytes=int(_read_env("KAFKA_SAMPLE_MAX_BYTES", values) or _read_env("ORCA_KAFKA_SAMPLE_MAX_BYTES", values) or AgentSettings.model_fields["kafka_sample_max_bytes"].default),
     )
 
 
@@ -194,6 +206,13 @@ def _read_bool_env(key: str, env_file_values: Mapping[str, str], *, default: boo
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_csv_env(key: str, env_file_values: Mapping[str, str]) -> list[str]:
+    value = _read_env(key, env_file_values)
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part.strip()]
 
 
 def _load_env_file(env_file: str | Path | None) -> dict[str, str]:

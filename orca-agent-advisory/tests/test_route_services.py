@@ -1,6 +1,8 @@
 from app.application.use_cases.route_services import AgentRouteServices
+from app.application.use_cases.streaming_route_services import StreamingRouteServices
 from app.application.ports.backtest_provider import BacktestProviderResult, BacktestRequest
 from app.application.ports.portfolio_provider import InMemoryPortfolioProvider
+from app.infrastructure.bigdata.streaming_providers import KafkaTopicMetadataInspectionProvider
 from app.schemas.agent import AgentQueryRequest, AgentContext, RoutedAgentQuery
 from app.schemas.enums import AgentRoute
 from app.schemas.portfolio import PortfolioAccountSnapshot, PortfolioPosition
@@ -33,6 +35,42 @@ class FakeBacktestProvider:
             trades_summary={"trades": 2, "strategy": request.strategy},
             equity_curve_sampled=[{"date": request.start_date, "equity": 1.0}, {"date": request.end_date, "equity": 1.12}],
         )
+
+
+class FakeStreamingProvider:
+    def get_pipeline_health(self, lookback_minutes: int) -> list[dict]:
+        return []
+
+    def get_symbol_freshness(self, symbols: list[str], lookback_minutes: int) -> list[dict]:
+        return []
+
+    def get_ingestion_lag(self, lookback_minutes: int) -> list[dict]:
+        return []
+
+    def get_latest_alerts(self, symbols: list[str], severities: list[str], limit: int, lookback_minutes: int) -> list[dict]:
+        return []
+
+    def get_active_symbol_alerts(self, symbol: str, lookback_minutes: int) -> list[dict]:
+        return []
+
+    def find_quality_incidents(self, symbols: list[str], lookback_minutes: int, limit: int) -> list[dict]:
+        return []
+
+    def compare_streaming_to_batch_features(self, symbols: list[str], as_of_date: str | None) -> list[dict]:
+        return []
+
+    def inspect_topics(self) -> list[dict]:
+        return [{"topic": "stock-market", "status": "diagnostic_only", "sample": {}, "limitation": "Kafka direct topic inspection not enabled; use Iceberg streaming tables for read-only diagnostics."}]
+
+
+class FakeKafkaInspectionProvider:
+    def inspect_topics(self, topics: list[str] | None = None) -> list[dict]:
+        return [{"topic": "stock-market", "status": "ok", "partition_count": 2, "latest_offsets": {"0": 10, "1": 20}, "consumer_lag": {"0": 1, "1": 0}, "sample": {}}]
+
+
+class FailingKafkaInspectionProvider:
+    def inspect_topics(self, topics: list[str] | None = None) -> list[dict]:
+        raise TimeoutError("metadata timeout")
 
 
 def _route(route: AgentRoute, symbols: list[str] | None = None) -> RoutedAgentQuery:
@@ -114,6 +152,54 @@ def test_backtest_code_does_not_import_yfinance() -> None:
     app_dir = pathlib.Path(__file__).parents[1] / "app"
     matches = [path for path in app_dir.rglob("*.py") if "import yfinance" in path.read_text(encoding="utf-8") or "from yfinance" in path.read_text(encoding="utf-8")]
     assert matches == []
+
+
+def test_streaming_topic_inspection_uses_kafka_provider_metadata() -> None:
+    streaming = FakeStreamingProvider()
+    response = StreamingRouteServices(streaming, streaming, streaming, topic_inspection_provider=FakeKafkaInspectionProvider()).topic_inspection(_route(AgentRoute.STREAMING_TOPIC_INSPECTION, []))
+
+    sample = response.result["samples"][0]
+    assert sample["topic"] == "stock-market"
+    assert sample["status"] == "ok"
+    assert sample["partition_count"] == 2
+    assert sample["latest_offsets"] == {"0": 10, "1": 20}
+    assert sample["consumer_lag"] == {"0": 1, "1": 0}
+    assert sample["sample"] == {}
+
+
+def test_streaming_topic_inspection_falls_back_to_diagnostic_provider() -> None:
+    streaming = FakeStreamingProvider()
+    response = StreamingRouteServices(streaming, streaming, streaming).topic_inspection(_route(AgentRoute.STREAMING_TOPIC_INSPECTION, []))
+
+    assert response.result["samples"][0]["status"] == "diagnostic_only"
+    assert "Kafka direct topic inspection not enabled" in response.result["samples"][0]["limitation"]
+
+
+def test_streaming_topic_inspection_failure_soft() -> None:
+    streaming = FakeStreamingProvider()
+    response = StreamingRouteServices(streaming, streaming, streaming, topic_inspection_provider=FailingKafkaInspectionProvider()).topic_inspection(_route(AgentRoute.STREAMING_TOPIC_INSPECTION, []))
+
+    sample = response.result["samples"][0]
+    assert sample["status"] == "error"
+    assert sample["error"] == "metadata timeout"
+    assert sample["limitation"] == "Kafka direct topic inspection failed soft."
+
+
+def test_kafka_topic_provider_rejects_topics_outside_allowlist_before_client_import() -> None:
+    provider = KafkaTopicMetadataInspectionProvider(bootstrap_servers="localhost:9092", allowed_topics=["stock-market"])
+
+    rows = provider.inspect_topics(["secret-topic"])
+
+    assert rows == [{"topic": "secret-topic", "status": "rejected", "error": "Topic not in Kafka inspection allowlist."}]
+
+
+def test_kafka_topic_provider_sample_masked_when_enabled() -> None:
+    provider = KafkaTopicMetadataInspectionProvider(bootstrap_servers="localhost:9092", allowed_topics=["stock-market"], sample_enabled=True, sample_max_bytes=4)
+
+    sample = provider._sample_disabled()
+
+    assert sample["status"] == "disabled"
+    assert "metadata inspection only" in sample["limitation"]
 
 
 def test_portfolio_rebalance_uses_provider_snapshot_when_account_id_present() -> None:

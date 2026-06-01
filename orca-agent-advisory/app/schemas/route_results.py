@@ -181,6 +181,9 @@ class StreamingTopicSample(BaseModel):
 
     topic: str
     status: str
+    partition_count: int | None = None
+    latest_offsets: dict[str, int] = Field(default_factory=dict)
+    consumer_lag: dict[str, int | None] | None = None
     sample: dict[str, Any] = Field(default_factory=dict)
     limitation: str | None = None
     error: str | None = None

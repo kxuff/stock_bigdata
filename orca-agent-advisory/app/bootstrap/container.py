@@ -12,7 +12,7 @@ from app.config import AgentSettings, load_settings
 from app.infrastructure.bigdata.bigdata_ml_provider import BigdataMlToolResultProvider
 from app.infrastructure.bigdata.backtest_provider import IcebergSparkBacktestProvider
 from app.infrastructure.bigdata.market_screen_provider import BigdataMarketScreenProvider
-from app.infrastructure.bigdata.streaming_providers import SparkStreamingProvider
+from app.infrastructure.bigdata.streaming_providers import KafkaTopicMetadataInspectionProvider, SparkStreamingProvider
 from app.infrastructure.crewai.crew_runner import HierarchicalCrewRunner
 from app.infrastructure.llm.agent_route_planner import LiteLLMAgentRoutePlanner
 from app.infrastructure.storage.output_store import DecisionOutputStore
@@ -60,13 +60,29 @@ def build_streaming_provider(settings: AgentSettings | None = None) -> SparkStre
     return SparkStreamingProvider()
 
 
+def build_kafka_topic_inspection_provider(settings: AgentSettings | None = None) -> KafkaTopicMetadataInspectionProvider | None:
+    resolved = settings or load_settings()
+    if not resolved.kafka_bootstrap_servers or not resolved.kafka_allowed_topics:
+        return None
+    provider = KafkaTopicMetadataInspectionProvider(
+        bootstrap_servers=resolved.kafka_bootstrap_servers,
+        allowed_topics=resolved.kafka_allowed_topics,
+        consumer_group=resolved.kafka_consumer_group,
+        timeout_seconds=resolved.kafka_inspection_timeout_seconds,
+        sample_enabled=resolved.kafka_sample_enabled,
+        sample_max_bytes=resolved.kafka_sample_max_bytes,
+    )
+    return provider if provider.is_available() else None
+
+
 def build_streaming_route_services(settings: AgentSettings | None = None) -> StreamingRouteServices:
-    provider = build_streaming_provider(settings or load_settings())
+    resolved = settings or load_settings()
+    provider = build_streaming_provider(resolved)
     return StreamingRouteServices(
         observability_provider=provider,
         alert_provider=provider,
         quality_provider=provider,
-        topic_inspection_provider=provider,
+        topic_inspection_provider=build_kafka_topic_inspection_provider(resolved) or provider,
     )
 
 
