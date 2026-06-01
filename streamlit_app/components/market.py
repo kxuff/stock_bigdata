@@ -75,9 +75,9 @@ def render_market_overview(df: pd.DataFrame) -> None:
             f"<div class='ticker-strip'>{''.join(items)}</div>",
             unsafe_allow_html=True,
         )
-    with toggle_col:
-        label = "⌃" if expanded else "⌄"
-        help_text = "Thu gon" if expanded else "Mo rong"
-        if st.button(label, key="market_overview_toggle", help=help_text, disabled=not can_expand):
-            st.session_state["market_overview_expanded"] = not expanded
-            st.rerun()
+    # with toggle_col:
+    #     label = "⌃" if expanded else "⌄"
+    #     help_text = "Thu gon" if expanded else "Mo rong"
+    #     if st.button(label, key="market_overview_toggle", help=help_text, disabled=not can_expand):
+    #         st.session_state["market_overview_expanded"] = not expanded
+    #         st.rerun()

@@ -182,7 +182,7 @@ def market_indicator_silver_stream(spark: SparkSession):
     )
     
 def news_silver_stream(spark: SparkSession):
-    bronze = spark.readStream.format("iceberg").load(f"{CATALOG}.bronze.stock_news")
+    bronze = spark.readStream.format("iceberg").load(f"{CATALOG}.bronze.stock_news_v2")
     clean = (
         bronze.select(
             "Datetime",
@@ -280,8 +280,8 @@ if __name__ == "__main__":
             ),
             write_iceberg_stream(
                 news_silver_stream(spark),
-                f"{CATALOG}.silver.stock_news_v2",
-                f"{CHECKPOINT_BASE}/stock_news_v2",
+                f"{CATALOG}.silver.stock_news_v3",
+                f"{CHECKPOINT_BASE}/stock_news_v3",
                 "stock_news"
             ),
         ])

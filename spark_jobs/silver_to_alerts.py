@@ -488,7 +488,7 @@ def write_alerts_for_batch(batch_df, batch_id: int) -> None:
     POSTGRES_OPTIONS = {
         "url": "jdbc:postgresql://postgres:5432/stock_db", 
         "driver": "org.postgresql.Driver",
-        "dbtable": "stock_market", 
+        "dbtable": "stock_alerts", 
         "user": "postgres",
         "password": "postgres"
     }
