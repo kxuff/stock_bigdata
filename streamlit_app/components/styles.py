@@ -68,6 +68,14 @@ def inject_global_styles() -> None:
             font-size: .74rem;
             font-weight: 800;
             line-height: 1.1;
+            display: flex;
+            align-items: center;
+            gap: .32rem;
+            white-space: nowrap;
+        }
+        .ticker-flag {
+            font-size: .9rem;
+            line-height: 1;
         }
         .ticker-price {
             margin-top: .45rem;

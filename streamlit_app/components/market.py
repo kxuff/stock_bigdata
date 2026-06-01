@@ -50,6 +50,7 @@ def render_market_overview(df: pd.DataFrame) -> None:
 
     expanded = st.session_state.get("market_overview_expanded", False)
     visible_df = df if expanded else df.head(COLLAPSED_ITEMS)
+    can_expand = len(df) > COLLAPSED_ITEMS
 
     items = []
     for _, row in visible_df.iterrows():
@@ -62,19 +63,21 @@ def render_market_overview(df: pd.DataFrame) -> None:
         indicator = _indicator_name(row.get("indicator", "N/A"))
         items.append(
             "<div class='ticker-item'>"
-            f"<div class='ticker-name'>{escape(indicator)}</div>"
+            f"<div class='ticker-name'><span class='ticker-flag'>🇺🇸</span>{escape(indicator)}</div>"
             f"<div class='ticker-price {css_class}'>{_fmt_number(row.get('close'))}</div>"
             f"<div class='ticker-change {css_class}'>{arrow} {_fmt_number(change)} ({_fmt_number(pct)}%)</div>"
             "</div>"
         )
 
-    st.markdown(
-        f"<div class='ticker-strip'>{''.join(items)}</div>",
-        unsafe_allow_html=True,
-    )
-
-    if len(df) > COLLAPSED_ITEMS:
-        label = "Thu gon" if expanded else f"Mo rong ({len(df) - COLLAPSED_ITEMS} chi so)"
-        if st.button(label, key="market_overview_toggle"):
+    strip_col, toggle_col = st.columns([24, 1])
+    with strip_col:
+        st.markdown(
+            f"<div class='ticker-strip'>{''.join(items)}</div>",
+            unsafe_allow_html=True,
+        )
+    with toggle_col:
+        label = "⌃" if expanded else "⌄"
+        help_text = "Thu gon" if expanded else "Mo rong"
+        if st.button(label, key="market_overview_toggle", help=help_text, disabled=not can_expand):
             st.session_state["market_overview_expanded"] = not expanded
             st.rerun()

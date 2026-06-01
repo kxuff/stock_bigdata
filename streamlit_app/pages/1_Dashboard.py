@@ -84,7 +84,7 @@ except Exception as exc:
 def render_market_fragment() -> None:
     st.markdown('<div class="section-title">Market Overview</div>', unsafe_allow_html=True)
     try:
-        overview = load_market_overview()
+        overview = load_market_overview(limit=50)
         render_market_overview(overview)
     except Exception as exc:
         st.warning(f"Cannot load market indicators: {exc}")
