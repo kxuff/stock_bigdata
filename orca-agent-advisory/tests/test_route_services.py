@@ -1,5 +1,6 @@
 from app.application.use_cases.route_services import AgentRouteServices
-from app.schemas.agent import RoutedAgentQuery
+from app.application.ports.backtest_provider import BacktestProviderResult, BacktestRequest
+from app.schemas.agent import AgentQueryRequest, AgentContext, RoutedAgentQuery
 from app.schemas.enums import AgentRoute
 
 
@@ -18,6 +19,18 @@ class FakeMarketScreenProvider:
 
     def diagnose(self) -> dict:
         return {"status": "ok"}
+
+
+class FakeBacktestProvider:
+    def is_available(self) -> bool:
+        return True
+
+    def run_backtest(self, request: BacktestRequest) -> BacktestProviderResult:
+        return BacktestProviderResult(
+            metrics={"total_return": 0.12, "symbols": request.symbols},
+            trades_summary={"trades": 2, "strategy": request.strategy},
+            equity_curve_sampled=[{"date": request.start_date, "equity": 1.0}, {"date": request.end_date, "equity": 1.12}],
+        )
 
 
 def _route(route: AgentRoute, symbols: list[str] | None = None) -> RoutedAgentQuery:
@@ -59,3 +72,43 @@ def test_market_brief_leaders_include_enriched_fields_and_warnings() -> None:
     assert leaders[0]["as_of"] == "2026-01-03"
     assert leaders[1]["status"] == "warning"
     assert "missing latest_price" in leaders[1]["warnings"]
+
+
+def test_backtest_unavailable_returns_planned_response() -> None:
+    request = AgentQueryRequest(message="backtest", context=AgentContext(symbols=["AAA"], metadata={"start_date": "2026-01-01", "end_date": "2026-01-31"}))
+
+    response = AgentRouteServices(FakeMarketScreenProvider()).backtest_analysis(request, _route(AgentRoute.BACKTEST_ANALYSIS, ["AAA"]))
+
+    assert response.result["status"] == "planned"
+    assert response.result["metrics"] is None
+    assert "External market data calls are disabled" in response.result["limitation"]
+
+
+def test_backtest_provider_returns_metrics() -> None:
+    request = AgentQueryRequest(message="backtest", context=AgentContext(symbols=["AAA"], metadata={"start_date": "2026-01-01", "end_date": "2026-01-31", "strategy": "buy_hold"}))
+
+    response = AgentRouteServices(FakeMarketScreenProvider(), FakeBacktestProvider()).backtest_analysis(request, _route(AgentRoute.BACKTEST_ANALYSIS, ["AAA"]))
+
+    assert response.result["status"] == "completed"
+    assert response.result["metrics"] == {"total_return": 0.12, "symbols": ["AAA"]}
+    assert response.result["trades_summary"] == {"trades": 2, "strategy": "buy_hold"}
+    assert response.result["equity_curve_sampled"][-1]["equity"] == 1.12
+
+
+def test_backtest_caps_limit_symbols_and_reject_date_range() -> None:
+    request = AgentQueryRequest(message="backtest", context=AgentContext(symbols=["AAA", "BBB", "CCC"], metadata={"start_date": "2026-01-01", "end_date": "2026-02-15", "max_symbols": 2, "max_date_range_days": 10}))
+
+    response = AgentRouteServices(FakeMarketScreenProvider(), FakeBacktestProvider()).backtest_analysis(request, _route(AgentRoute.BACKTEST_ANALYSIS, ["AAA", "BBB", "CCC"]))
+
+    assert response.result["status"] == "disabled"
+    assert response.symbols == ["AAA", "BBB"]
+    assert "symbol cap applied" in response.result["warnings"][0]
+    assert "date range cap rejected" in response.result["warnings"][1]
+
+
+def test_backtest_code_does_not_import_yfinance() -> None:
+    import pathlib
+
+    app_dir = pathlib.Path(__file__).parents[1] / "app"
+    matches = [path for path in app_dir.rglob("*.py") if "import yfinance" in path.read_text(encoding="utf-8") or "from yfinance" in path.read_text(encoding="utf-8")]
+    assert matches == []

@@ -234,3 +234,7 @@ class BacktestAnalysisResult(BaseModel):
     status: str
     limitation: str
     suggested_next_action: str
+    metrics: dict[str, Any] | None = None
+    trades_summary: dict[str, Any] | None = None
+    equity_curve_sampled: list[dict[str, Any]] | None = None
+    warnings: list[str] = Field(default_factory=list)

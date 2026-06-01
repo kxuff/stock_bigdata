@@ -1,3 +1,5 @@
+import os
+
 from app.application.ports.crew_orchestrator import CrewOrchestrator
 from app.application.ports.output_store import DecisionOutputStore as DecisionOutputStorePort
 from app.application.ports.tool_result_provider import ToolResultProvider
@@ -8,6 +10,7 @@ from app.application.use_cases.route_services import AgentRouteServices
 from app.application.use_cases.streaming_route_services import StreamingRouteServices
 from app.config import AgentSettings, load_settings
 from app.infrastructure.bigdata.bigdata_ml_provider import BigdataMlToolResultProvider
+from app.infrastructure.bigdata.backtest_provider import IcebergSparkBacktestProvider
 from app.infrastructure.bigdata.market_screen_provider import BigdataMarketScreenProvider
 from app.infrastructure.bigdata.streaming_providers import SparkStreamingProvider
 from app.infrastructure.crewai.crew_runner import HierarchicalCrewRunner
@@ -49,7 +52,8 @@ def build_market_screen_provider(settings: AgentSettings | None = None) -> Bigda
 
 
 def build_route_services(settings: AgentSettings | None = None) -> AgentRouteServices:
-    return AgentRouteServices(market_screen_provider=build_market_screen_provider(settings or load_settings()))
+    backtest_provider = IcebergSparkBacktestProvider() if os.getenv("ORCA_BACKTEST_PROVIDER", "").strip().lower() in {"iceberg", "spark", "iceberg_spark"} else None
+    return AgentRouteServices(market_screen_provider=build_market_screen_provider(settings or load_settings()), backtest_provider=backtest_provider)
 
 
 def build_streaming_provider(settings: AgentSettings | None = None) -> SparkStreamingProvider:

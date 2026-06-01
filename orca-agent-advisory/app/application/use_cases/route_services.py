@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
+from app.application.ports.backtest_provider import BacktestProvider, BacktestRequest
 from app.application.ports.market_screen_provider import MarketScreenProvider
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse, RoutedAgentQuery, SuggestedAction
 from app.schemas.enums import AgentRoute
@@ -10,6 +12,7 @@ from app.schemas.route_results import BacktestAnalysisResult, ComparisonRow, Dat
 @dataclass
 class AgentRouteServices:
     market_screen_provider: MarketScreenProvider
+    backtest_provider: BacktestProvider | None = None
 
     def symbol_comparison(self, route: RoutedAgentQuery) -> AgentQueryResponse:
         rows = [_comparison_row(row, i + 1) for i, row in enumerate(sorted(self.market_screen_provider.load_symbols(route.symbols), key=lambda r: r.get("final_score") or 0, reverse=True))]
@@ -61,20 +64,50 @@ class AgentRouteServices:
         return AgentQueryResponse(route=route.route, status="immediate", message=result.message, symbols=symbols, result_type="portfolio_rebalance", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)
 
     def backtest_analysis(self, request: AgentQueryRequest, route: RoutedAgentQuery) -> AgentQueryResponse:
+        metadata = request.context.metadata
         symbols = route.symbols or request.context.symbols or ([request.context.symbol] if request.context.symbol else [])
+        symbols = [str(symbol).strip().upper().replace(".", "-") for symbol in symbols if str(symbol).strip()]
+        max_symbols = _positive_int(metadata.get("max_symbols"), 25)
+        max_days = _positive_int(metadata.get("max_date_range_days"), 365)
+        start_date = _str_or_none(metadata.get("start_date"))
+        end_date = _str_or_none(metadata.get("end_date"))
+        strategy = str(metadata.get("strategy") or "ORCA signal review")
+        warnings: list[str] = []
+        if len(symbols) > max_symbols:
+            symbols = symbols[:max_symbols]
+            warnings.append(f"symbol cap applied: max_symbols={max_symbols}")
+        days = _date_range_days(start_date, end_date)
+        if days is not None and days > max_days:
+            result = BacktestAnalysisResult(
+                backtest_spec={"symbols": symbols, "start_date": start_date, "end_date": end_date, "strategy": strategy, "data_source": "iceberg_spark"},
+                status="disabled",
+                limitation=f"Requested date range exceeds max_date_range_days={max_days}.",
+                suggested_next_action="Narrow context.metadata.start_date/end_date or submit heavy job through /api/v1/agent/query-jobs.",
+                warnings=warnings + [f"date range cap rejected: requested_days={days}, max_date_range_days={max_days}"],
+            )
+            return AgentQueryResponse(route=route.route, status="immediate", message="Backtest analysis rejected by production safety caps. No chart rendered.", symbols=symbols, result_type="backtest_analysis", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)
+        spec = {"symbols": symbols, "start_date": start_date, "end_date": end_date, "strategy": strategy, "data_source": "iceberg_spark"}
+        if self.backtest_provider is not None and self.backtest_provider.is_available():
+            provider_result = self.backtest_provider.run_backtest(BacktestRequest(symbols=symbols, start_date=start_date, end_date=end_date, strategy=strategy, metadata=metadata))
+            result = BacktestAnalysisResult(
+                backtest_spec=spec,
+                status="completed",
+                limitation="Iceberg/Spark backtest adapter returned deterministic API-safe summary. Chart rendering disabled in API.",
+                suggested_next_action="For heavy workloads, use /api/v1/agent/query-jobs.",
+                metrics=provider_result.metrics,
+                trades_summary=provider_result.trades_summary,
+                equity_curve_sampled=provider_result.equity_curve_sampled,
+                warnings=warnings + provider_result.warnings,
+            )
+            return AgentQueryResponse(route=route.route, status="immediate", message="Backtest analysis completed from Iceberg/Spark provider. No external market data fetched.", symbols=symbols, result_type="backtest_analysis", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)
         result = BacktestAnalysisResult(
-            backtest_spec={
-                "symbols": symbols,
-                "start_date": request.context.metadata.get("start_date"),
-                "end_date": request.context.metadata.get("end_date"),
-                "strategy": request.context.metadata.get("strategy", "ORCA signal review"),
-                "data_source": "not_connected_in_orca_api",
-            },
+            backtest_spec=spec,
             status="planned",
-            limitation="Backend backtest service is not connected to Iceberg here and yfinance is disabled in ORCA API for production safety.",
-            suggested_next_action="Use the Streamlit Stock Picks backtest page or connect an Iceberg-backed backtest adapter.",
+            limitation="Iceberg/Spark backtest provider is not configured or unavailable. External market data calls are disabled in ORCA API for production safety.",
+            suggested_next_action="Configure Iceberg-backed backtest adapter or submit planned heavy workload through /api/v1/agent/query-jobs.",
+            warnings=warnings,
         )
-        return AgentQueryResponse(route=route.route, status="immediate", message="Backtest analysis route supported as planning/spec response. No external market data fetched.", symbols=symbols, result_type="backtest_analysis", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)
+        return AgentQueryResponse(route=route.route, status="immediate", message="Backtest analysis planned only. No external market data fetched and no chart rendered.", symbols=symbols, result_type="backtest_analysis", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)
 
 
 def _response(route: RoutedAgentQuery, result_type: str, result: dict[str, Any]) -> AgentQueryResponse:
@@ -140,6 +173,23 @@ def _float(value: Any) -> float | None:
     try:
         return None if value is None else float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _date_range_days(start_date: str | None, end_date: str | None) -> int | None:
+    if not start_date or not end_date:
+        return None
+    try:
+        return (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days + 1
+    except ValueError:
         return None
 
 
