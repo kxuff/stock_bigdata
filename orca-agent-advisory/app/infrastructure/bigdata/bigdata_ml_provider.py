@@ -37,7 +37,7 @@ RowLoader = Callable[[AdvisoryDecisionRequest], Iterable[Mapping[str, Any]]]
 @dataclass(frozen=True)
 class BigdataMlTableConfig:
     prediction_table: str = field(
-        default_factory=lambda: os.getenv("ORCA_ML_PREDICTION_TABLE", "ml_ready.stock_predictions")
+        default_factory=lambda: os.getenv("ORCA_ML_PREDICTION_TABLE", "ml_ready.stock_predictions_v2")
     )
     feature_table: str = field(
         default_factory=lambda: os.getenv("ORCA_ML_FEATURE_TABLE", "ml_ready.stock_price_features")

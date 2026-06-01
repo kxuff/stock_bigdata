@@ -131,7 +131,19 @@ def _source_reliability_score(results: list[BaseToolResult]) -> float:
     if not source_refs:
         return 0.5
 
-    trusted_prefixes = ("postgresql.", "spark.", "mongodb.")
+    trusted_prefixes = (
+        "postgresql.",
+        "spark.",
+        "mongodb.",
+        "nessie.",
+        "raw.",
+        "curated.",
+        "ml_ready.",
+        "bronze.",
+        "silver.",
+        "ml.",
+        "alert.",
+    )
     trusted_count = sum(
         1 for source_ref in source_refs if source_ref.startswith(trusted_prefixes)
     )
