@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import ceil
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
-from components.charts import build_stock_figure
 from components.market import render_market_overview
 from components.news import render_news_cards
 from components.styles import inject_global_styles
@@ -17,24 +15,12 @@ from data_loader import (
     load_latest_market,
     load_market_overview,
     load_news,
-    load_stock_history,
     load_symbols,
 )
 
 
 st.set_page_config(page_title="Market Dashboard", page_icon="chart", layout="wide")
 inject_global_styles()
-
-
-def auto_refresh(interval_seconds: int) -> None:
-    components.html(
-        f"""
-        <script>
-        setTimeout(() => window.parent.location.reload(), {interval_seconds * 1000});
-        </script>
-        """,
-        height=0,
-    )
 
 
 def clear_caches() -> None:
@@ -45,11 +31,6 @@ def clear_caches() -> None:
 def page_slice(df: pd.DataFrame, page: int, page_size: int) -> pd.DataFrame:
     start = (page - 1) * page_size
     return df.iloc[start : start + page_size]
-
-
-def timeframe_start(label: str) -> datetime:
-    days = {"1D": 1, "1W": 7, "1M": 31, "3M": 93, "6M": 186, "1Y": 366}[label]
-    return datetime.now() - timedelta(days=days)
 
 
 def format_market_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -84,15 +65,13 @@ st.markdown(
 
 with st.sidebar:
     st.header("Controls")
-    interval_seconds = 60
-    st.caption("Market data refreshes every 60 seconds. News queries use a 5 minute cache TTL.")
+    st.caption("Market, stock monitor, and alerts update every 60 seconds without reloading the full page.")
+    st.caption("News updates every 5 minutes.")
     if st.button("Refresh now", use_container_width=True):
         clear_caches()
         st.rerun()
     st.caption(f"Last manual refresh: {st.session_state.get('last_manual_refresh', 'not used')}")
     st.caption(f"Page generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-auto_refresh(interval_seconds)
 
 try:
     symbols = load_symbols()
@@ -100,23 +79,27 @@ except Exception as exc:
     st.error(f"Cannot connect to PostgreSQL or load symbols: {exc}")
     st.stop()
 
-st.markdown('<div class="section-title">Market Overview</div>', unsafe_allow_html=True)
-try:
-    overview = load_market_overview()
-    render_market_overview(overview)
-except Exception as exc:
-    st.warning(f"Cannot load market indicators: {exc}")
 
-st.markdown('<div class="section-title">Stock Monitor</div>', unsafe_allow_html=True)
-monitor_filter, monitor_chart = st.columns([1.1, 1.9])
+@st.fragment(run_every="60s")
+def render_market_fragment() -> None:
+    st.markdown('<div class="section-title">Market Overview</div>', unsafe_allow_html=True)
+    try:
+        overview = load_market_overview()
+        render_market_overview(overview)
+    except Exception as exc:
+        st.warning(f"Cannot load market indicators: {exc}")
 
-with monitor_filter:
+
+@st.fragment(run_every="60s")
+def render_stock_monitor_fragment() -> None:
+    st.markdown('<div class="section-title">Stock Monitor</div>', unsafe_allow_html=True)
     search = st.text_input("Search symbol", "")
     selected_universe = [symbol for symbol in symbols if search.upper() in symbol.upper()] if search else symbols
-    quick_symbols = st.multiselect("Filter symbols", selected_universe[:500], default=[])
-    sort_col = st.selectbox("Sort by", ["symbol", "close", "volume", "day_change_pct"], index=0)
-    sort_desc = st.toggle("Descending", value=False)
-    page_size = st.selectbox("Rows per page", [10, 25, 50, 100], index=1)
+    filter_col, sort_col_box, direction_col, size_col = st.columns([2, 1, 1, 1])
+    quick_symbols = filter_col.multiselect("Filter symbols", selected_universe[:500], default=[])
+    sort_col = sort_col_box.selectbox("Sort by", ["symbol", "close", "volume", "day_change_pct"], index=0)
+    sort_desc = direction_col.toggle("Descending", value=False)
+    page_size = size_col.selectbox("Rows per page", [10, 25, 50, 100], index=1)
 
     market_df = load_latest_market(tuple(quick_symbols) if quick_symbols else None, limit=1000)
     if search:
@@ -129,55 +112,54 @@ with monitor_filter:
     st.caption(f"{len(market_df):,} symbols - page {market_page}/{total_pages}")
     st.dataframe(format_market_table(page_slice(market_df, int(market_page), int(page_size))), width="stretch", hide_index=True)
 
-with monitor_chart:
-    default_symbol = market_df["symbol"].iloc[0] if not market_df.empty else (symbols[0] if symbols else "")
-    chart_symbol = st.selectbox("Chart symbol", symbols, index=symbols.index(default_symbol) if default_symbol in symbols else 0)
-    timeframe = st.segmented_control("Timeframe", ["1D", "1W", "1M", "3M", "6M", "1Y"], default="1D")
-    history = load_stock_history(chart_symbol, timeframe_start(timeframe))
-    st.plotly_chart(build_stock_figure(history, chart_symbol), width="stretch")
 
-st.markdown('<div class="section-title">News Feed</div>', unsafe_allow_html=True)
-news_filter_col, news_body_col = st.columns([0.9, 2.1])
-with news_filter_col:
-    news_symbol = st.selectbox("News symbol", ["All"] + symbols, index=0)
-    headline_search = st.text_input("Search headline")
-    news_page_size = st.selectbox("News per page", [5, 8, 12, 20], index=1)
-with news_body_col:
-    news_df = load_news(news_symbol, headline_search, limit=300)
-    news_total_pages = max(1, ceil(len(news_df) / news_page_size))
-    page_col, count_col = st.columns([1, 3])
-    news_page = page_col.number_input("News page", min_value=1, max_value=news_total_pages, value=1, step=1)
-    count_col.markdown(
-        f"<div class='status-line'>{len(news_df):,} articles - cache TTL 5 minutes</div>",
-        unsafe_allow_html=True,
+@st.fragment(run_every="300s")
+def render_news_fragment() -> None:
+    st.markdown('<div class="section-title">News Feed</div>', unsafe_allow_html=True)
+    news_filter_col, news_body_col = st.columns([0.9, 2.1])
+    with news_filter_col:
+        news_symbol = st.selectbox("News symbol", ["All"] + symbols, index=0)
+        headline_search = st.text_input("Search headline")
+        news_page_size = st.selectbox("News per page", [5, 8, 12, 20], index=1)
+    with news_body_col:
+        news_df = load_news(news_symbol, headline_search, limit=300)
+        news_total_pages = max(1, ceil(len(news_df) / news_page_size))
+        page_col, count_col = st.columns([1, 3])
+        news_page = page_col.number_input("News page", min_value=1, max_value=news_total_pages, value=1, step=1)
+        count_col.markdown(
+            f"<div class='status-line'>{len(news_df):,} articles - cache TTL 5 minutes</div>",
+            unsafe_allow_html=True,
+        )
+        render_news_cards(news_df, int(news_page), int(news_page_size))
+
+
+@st.fragment(run_every="60s")
+def render_alerts_fragment() -> None:
+    st.markdown('<div class="section-title">Alerts Center</div>', unsafe_allow_html=True)
+    try:
+        alert_symbols, alert_types, alert_levels = load_alert_filter_values()
+    except Exception:
+        alert_symbols, alert_types, alert_levels = [], [], []
+
+    alert_col1, alert_col2, alert_col3, alert_col4 = st.columns(4)
+    selected_alert_symbols = alert_col1.multiselect("Alert symbols", alert_symbols, default=[])
+    selected_alert_types = alert_col2.multiselect("Alert types", alert_types, default=[])
+    selected_alert_levels = alert_col3.multiselect("Alert levels", alert_levels, default=[])
+    date_range = alert_col4.date_input("Event time range", value=())
+    start_date = date_range[0] if isinstance(date_range, tuple) and len(date_range) >= 1 else None
+    end_date = date_range[1] if isinstance(date_range, tuple) and len(date_range) >= 2 else None
+
+    alerts = load_alerts(
+        tuple(selected_alert_symbols),
+        tuple(selected_alert_types),
+        tuple(selected_alert_levels),
+        start_date,
+        end_date,
+        limit=1000,
     )
-    render_news_cards(news_df, int(news_page), int(news_page_size))
-
-st.markdown('<div class="section-title">Alerts Center</div>', unsafe_allow_html=True)
-try:
-    alert_symbols, alert_types, alert_levels = load_alert_filter_values()
-except Exception:
-    alert_symbols, alert_types, alert_levels = [], [], []
-
-alert_col1, alert_col2, alert_col3, alert_col4 = st.columns(4)
-selected_alert_symbols = alert_col1.multiselect("Alert symbols", alert_symbols, default=[])
-selected_alert_types = alert_col2.multiselect("Alert types", alert_types, default=[])
-selected_alert_levels = alert_col3.multiselect("Alert levels", alert_levels, default=[])
-date_range = alert_col4.date_input("Event time range", value=())
-start_date = date_range[0] if isinstance(date_range, tuple) and len(date_range) >= 1 else None
-end_date = date_range[1] if isinstance(date_range, tuple) and len(date_range) >= 2 else None
-
-alerts = load_alerts(
-    tuple(selected_alert_symbols),
-    tuple(selected_alert_types),
-    tuple(selected_alert_levels),
-    start_date,
-    end_date,
-    limit=1000,
-)
-if alerts.empty:
-    st.info("No alerts matched the current filters.")
-else:
+    if alerts.empty:
+        st.info("No alerts matched the current filters.")
+        return
 
     def level_style(row: pd.Series) -> list[str]:
         level = str(row.get("Alert Level", "")).lower()
@@ -193,13 +175,16 @@ else:
     display_alerts = alerts.rename(
         columns={
             "symbol": "Symbol",
+            "event_time": "Event Time",
             "alert_type": "Alert Type",
             "alert_level": "Alert Level",
-            "feature_name": "Feature Name",
-            "feature_value": "Feature Value",
-            "threshold_value": "Threshold Value",
             "message": "Message",
-            "event_time": "Event Time",
         }
-    )
+    )[["Symbol", "Event Time", "Alert Type", "Alert Level", "Message"]]
     st.dataframe(display_alerts.style.apply(level_style, axis=1), width="stretch", hide_index=True)
+
+
+render_market_fragment()
+render_stock_monitor_fragment()
+render_news_fragment()
+render_alerts_fragment()
