@@ -199,6 +199,22 @@ def _request_payload(prompt: str, symbol: str, horizon_value: str, risk_value: s
     }
 
 
+def _normalize_symbol(raw_symbol: str) -> str:
+    return raw_symbol.strip().upper().replace(".", "-")
+
+
+def _normalize_symbols(raw_symbols: str) -> list[str]:
+    normalized_symbols = []
+    seen_symbols = set()
+    for raw_symbol in raw_symbols.split(","):
+        symbol = _normalize_symbol(raw_symbol)
+        if not symbol or symbol in seen_symbols:
+            continue
+        normalized_symbols.append(symbol)
+        seen_symbols.add(symbol)
+    return normalized_symbols
+
+
 def _format_decision(decision: dict) -> str:
     rationale = decision.get("decision_rationale") or []
     bullets = "\n".join(f"- {item.get('factor', 'Factor')}: {item.get('explanation', '')}" for item in rationale[:4])
@@ -400,13 +416,12 @@ def _render_pending_jobs() -> None:
             if job.get("progress_stage") or job.get("progress_pct") is not None:
                 st.caption(f"Progress: {job.get('progress_stage') or 'N/A'} · {job.get('progress_pct', 'N/A')}%")
 
-            refresh_col, fetch_col, cancel_col = st.columns(3)
+            refresh_col, fetch_col = st.columns(2)
             if refresh_col.button("Refresh status", key=f"refresh-{job['job_id']}", use_container_width=True):
                 _refresh_job_status(job)
                 st.rerun()
             if fetch_col.button("Fetch result", key=f"fetch-{job['job_id']}", use_container_width=True):
                 _fetch_job_result(job)
-            cancel_col.button("Cancel", key=f"cancel-{job['job_id']}", disabled=True, use_container_width=True)
 
 st.markdown(
     """
@@ -429,7 +444,7 @@ st.markdown(
 with st.sidebar:
     st.header("ORCA Context")
     st.caption("Frame advisory requests for backend services.")
-    symbols = st.text_input("Symbols", "NVDA, MSFT, LLY")
+    symbols = st.text_input("Watchlist symbols", "NVDA, MSFT, LLY")
     horizon = st.selectbox("Horizon", ["Intraday", "1-4 weeks", "1-3 months", "6-12 months"], index=1)
     risk = st.select_slider("Risk tolerance", ["Low", "Medium", "High"], value="Medium")
     st.markdown("---")
@@ -442,11 +457,16 @@ if "completed_orca_message_ids" not in st.session_state:
     st.session_state.completed_orca_message_ids = set()
 _pending_jobs()
 
-symbol_list = [symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()]
+symbol_list = _normalize_symbols(symbols)
 symbol_display = ", ".join(symbol_list) or "No symbols"
 primary_symbol = symbol_list[0] if symbol_list else ""
 if len(symbol_list) > 1:
-    primary_symbol = st.selectbox("Primary symbol for advisory", symbol_list)
+    primary_symbol = st.selectbox("Symbol submitted to ORCA", symbol_list)
+else:
+    st.selectbox("Symbol submitted to ORCA", symbol_list or ["No valid symbol"], disabled=not symbol_list)
+st.caption("Only selected primary symbol is submitted for single-symbol advisory.")
+if not primary_symbol:
+    st.warning("Enter at least one valid watchlist symbol before submitting ORCA advisory job.")
 
 summary_cols = st.columns([1.25, 1, 1])
 summary_cards = [
@@ -484,7 +504,7 @@ for col, (label, sample, detail) in zip(prompt_cols, sample_prompts):
         """,
         unsafe_allow_html=True,
     )
-    if col.button(sample, use_container_width=True):
+    if col.button(sample, use_container_width=True, disabled=not primary_symbol):
         st.session_state.messages.append({"role": "user", "content": sample})
         with st.spinner("Submitting ORCA advisory job..."):
             st.session_state.messages.append({"role": "assistant", "content": _submit_orca_job(sample, primary_symbol, horizon, risk)})
@@ -501,8 +521,11 @@ if user_prompt := st.chat_input("Ask ORCA about markets or stocks..."):
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
-    with st.spinner("Submitting ORCA advisory job..."):
-        reply = _submit_orca_job(user_prompt, primary_symbol, horizon, risk)
+    if not primary_symbol:
+        reply = "Select at least one valid watchlist symbol before submitting ORCA advisory job."
+    else:
+        with st.spinner("Submitting ORCA advisory job..."):
+            reply = _submit_orca_job(user_prompt, primary_symbol, horizon, risk)
     st.session_state.messages.append({"role": "assistant", "content": reply})
     with st.chat_message("assistant"):
         st.markdown(reply)
