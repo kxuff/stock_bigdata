@@ -173,6 +173,103 @@ def create_agent_query(
     return autonomous_agent_service.query(request)
 
 
+@app.post("/api/v1/agent/query-jobs", status_code=status.HTTP_202_ACCEPTED)
+def create_agent_query_job(
+    request: AgentQueryRequest,
+    background_tasks: BackgroundTasks,
+    autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
+) -> dict[str, Any]:
+    job_id = str(uuid4())
+    now = _now_iso()
+    job = {
+        "job_id": job_id,
+        "request_id": "UNKNOWN",
+        "status": "queued",
+        "progress": 0,
+        "progress_stage": "queued",
+        "run_id": None,
+        "error": None,
+        "result": None,
+        "created_at": now,
+        "updated_at": now,
+        "started_at": None,
+        "completed_at": None,
+    }
+    with _jobs_lock:
+        _jobs[job_id] = job
+    background_tasks.add_task(_run_agent_query_job, job_id, request, autonomous_agent_service)
+    return _job_public(job, include_links=True, base_path="/api/v1/agent/query-jobs")
+
+
+@app.get("/api/v1/agent/query-jobs/{job_id}", response_model=None)
+def get_agent_query_job(job_id: str) -> JSONResponse | dict[str, Any]:
+    job = _get_job(job_id)
+    if job is None:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "job not found"})
+    return _job_public(job, base_path="/api/v1/agent/query-jobs")
+
+
+@app.get("/api/v1/agent/query-jobs/{job_id}/result", response_model=None)
+def get_agent_query_job_result(job_id: str) -> JSONResponse | dict[str, Any]:
+    job = _get_job(job_id)
+    if job is None:
+        return _error_response(
+            request_id="UNKNOWN",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code="JOB_NOT_FOUND",
+            message="job not found",
+            recoverable=False,
+        )
+    if job["status"] == "failed":
+        error = job["error"]
+        if isinstance(error, dict) and "status_code" in error and "body" in error:
+            return JSONResponse(status_code=error["status_code"], content=error["body"])
+        return _error_response(
+            request_id=job.get("request_id") or "UNKNOWN",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code="INTERNAL_ERROR",
+            message=str(error) or "agent query job failed",
+            recoverable=True,
+        )
+    if job["status"] != "succeeded":
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=_job_public(job, base_path="/api/v1/agent/query-jobs"))
+    return job["result"]
+
+
+@app.get("/api/v1/agent/query-jobs/{job_id}/events", response_model=None)
+async def stream_agent_query_job_events(job_id: str) -> StreamingResponse:
+    async def event_stream():
+        previous_payload = None
+        while True:
+            job = _get_job(job_id)
+            if job is None:
+                yield _sse_event("error", {"error_code": "JOB_NOT_FOUND", "message": "job not found"})
+                return
+
+            public_job = _job_public(job, base_path="/api/v1/agent/query-jobs")
+            payload = json.dumps(public_job, separators=(",", ":"), sort_keys=True)
+            if payload != previous_payload:
+                yield _sse_event("status", public_job)
+                previous_payload = payload
+            else:
+                yield _sse_event("heartbeat", {"job_id": job_id, "time": _now_iso()})
+
+            if job.get("status") == "succeeded":
+                yield _sse_event("result", job.get("result") or {})
+                return
+            if job.get("status") == "failed":
+                yield _sse_event("failure", job.get("error") or {})
+                return
+
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def _create_decision_job(
     request: AdvisoryDecisionRequest,
     http_request: Request,
@@ -458,6 +555,52 @@ def _run_decision_job(
         )
 
 
+def _run_agent_query_job(
+    job_id: str,
+    request: AgentQueryRequest,
+    autonomous_agent_service: AutonomousAgentService,
+) -> None:
+    _update_job(job_id, status="running", progress=10, progress_stage="running", started_at=_now_iso())
+    try:
+        response = autonomous_agent_service.query(request)
+        result = response.model_dump(mode="json")
+        _update_job(
+            job_id,
+            status="succeeded",
+            progress=100,
+            progress_stage="completed",
+            result=result,
+            completed_at=_now_iso(),
+        )
+    except TimeoutError as exc:
+        _fail_job(
+            job_id,
+            request_id="UNKNOWN",
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            error_code="AGENT_TIMEOUT",
+            message=str(exc) or "agent execution timed out",
+            recoverable=True,
+        )
+    except (DecisionValidationError, ValidationError) as exc:
+        _fail_job(
+            job_id,
+            request_id="UNKNOWN",
+            status_code=422,
+            error_code="VALIDATION_FAILED",
+            message=str(exc),
+            recoverable=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - job surface stores failure for result endpoint.
+        _fail_job(
+            job_id,
+            request_id="UNKNOWN",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code="INTERNAL_ERROR",
+            message=str(exc) or "agent query job failed",
+            recoverable=True,
+        )
+
+
 def _fail_job(
     job_id: str,
     *,
@@ -488,25 +631,33 @@ def _fail_job(
 
 def _update_job(job_id: str, **updates: Any) -> None:
     updates["updated_at"] = _now_iso()
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id].update(updates)
+            return
     store = get_decision_job_store()
     if store is not None:
         store.update_job(job_id, **updates)
         return
-    with _jobs_lock:
-        if job_id in _jobs:
-            _jobs[job_id].update(updates)
 
 
 def _get_job(job_id: str) -> dict[str, Any] | None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job:
+            return dict(job)
     store = get_decision_job_store()
     if store is not None:
         return store.get_job(job_id)
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        return dict(job) if job else None
+    return None
 
 
-def _job_public(job: dict[str, Any], *, include_links: bool = False) -> dict[str, Any]:
+def _job_public(
+    job: dict[str, Any],
+    *,
+    include_links: bool = False,
+    base_path: str = "/api/v1/advisory/decision-jobs",
+) -> dict[str, Any]:
     public_fields = {
         "job_id",
         "request_id",
@@ -523,9 +674,9 @@ def _job_public(job: dict[str, Any], *, include_links: bool = False) -> dict[str
     payload = {key: value for key, value in job.items() if key in public_fields}
     if include_links:
         payload["links"] = {
-            "status": f"/api/v1/advisory/decision-jobs/{job['job_id']}",
-            "result": f"/api/v1/advisory/decision-jobs/{job['job_id']}/result",
-            "events": f"/api/v1/advisory/decision-jobs/{job['job_id']}/events",
+            "status": f"{base_path}/{job['job_id']}",
+            "result": f"{base_path}/{job['job_id']}/result",
+            "events": f"{base_path}/{job['job_id']}/events",
         }
     return payload
 
