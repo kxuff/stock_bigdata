@@ -40,6 +40,13 @@ def add_agent_response(response: dict) -> None:
     st.session_state.messages.append({"role": "assistant", "type": "agent_response", "response": response})
 
 
+def add_agent_response_once(message_id: str, response: dict) -> None:
+    if message_id in st.session_state.completed_orca_message_ids:
+        return
+    add_agent_response(response)
+    st.session_state.completed_orca_message_ids.add(message_id)
+
+
 def add_once(message_id: str, content: str) -> None:
     if message_id in st.session_state.completed_orca_message_ids:
         return
@@ -84,7 +91,7 @@ def sync_jobs_to_query() -> None:
     if not jobs:
         st.query_params.pop("orca_jobs", None)
         return
-    compact = [{"job_id": j.get("job_id"), "symbol": j.get("symbol"),
+    compact = [{"job_id": j.get("job_id"), "kind": j.get("kind"), "symbol": j.get("symbol"),
                 "created_at": j.get("created_at"), "status": j.get("status")} for j in jobs]
     encoded = base64.urlsafe_b64encode(
         json.dumps(compact, separators=(",", ":")).encode()

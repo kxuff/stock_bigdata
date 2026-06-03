@@ -4,9 +4,10 @@ from __future__ import annotations
 import streamlit as st
 
 from services.advisory_api import (
-    create_agent_query,
+    create_agent_query_job,
     fetch_health,
     fetch_status,
+    stream_agent_query_job_events,
     stream_decision_job_events,
 )
 from chat import state
@@ -80,10 +81,10 @@ def check_backend() -> dict:
 # ── Submit ────────────────────────────────────────────────────────────────────
 
 def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
-    """Call /api/v1/agent/query, update session state, return error string or None."""
+    """Create /api/v1/agent/query-jobs async job, update session state, return error string or None."""
     try:
         fetch_health()
-        response = create_agent_query({
+        job = create_agent_query_job({
             "message": prompt,
             "context": {
                 "symbol": symbol or None,
@@ -91,28 +92,13 @@ def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
                 "risk_tolerance": risk_value(risk),
             },
         })
-        if response.get("status") == "immediate":
-            rt = response.get("result_type")
-            if rt == "single_symbol_decision":
-                state.add_decision(response.get("result") or {})
-                return None
-            if rt:
-                state.add_agent_response(response)
-                return None
-            # clarification / out-of-scope
-            suggestions = response.get("suggested_actions") or []
-            sug_lines = "\n".join(f"› {s.get('label', s)}" for s in suggestions[:4])
-            route = response.get("route", "unknown")
-            return f"**Route:** `{route}`\n\n{response.get('message', '')}\n\n{sug_lines}"
-        # async job
-        job = response.get("job")
         if not isinstance(job, dict) or not job.get("job_id"):
             return _error_md("malformed_response", "ORCA returned no job_id.", repr(job))
-        job_symbol = (response.get("symbols") or [symbol or "N/A"])[0]
         state.add_job({
             "job_id":         job["job_id"],
-            "symbol":         job_symbol,
-            "route":          response.get("route"),
+            "kind":           "agent_query",
+            "symbol":         symbol or "N/A",
+            "route":          None,
             "prompt":         prompt,
             "created_at":     state.utc_now().isoformat(),
             "updated_at":     None,
@@ -132,7 +118,8 @@ def stream_events(job: dict) -> None:
         if not job.get("job_id"):
             job["status"] = "failed"; job["error_message"] = "Missing job_id."
             return
-        for event in stream_decision_job_events(job["job_id"]):
+        event_source = stream_agent_query_job_events if job.get("kind") == "agent_query" else stream_decision_job_events
+        for event in event_source(job["job_id"]):
             etype = event.get("event")
             data  = event.get("data") or {}
             if not isinstance(data, dict):
@@ -148,7 +135,10 @@ def stream_events(job: dict) -> None:
                 if state.is_stale(job):
                     job["status"] = "stale"
             elif etype == "result":
-                state.add_decision_once(f"{job['job_id']}:result", data)
+                if job.get("kind") == "agent_query":
+                    _add_agent_query_result(job["job_id"], data)
+                else:
+                    state.add_decision_once(f"{job['job_id']}:result", data)
                 job.update({"status": "completed", "result_fetched": True,
                             "events_complete": True, "updated_at": state.utc_now().isoformat()})
                 break
@@ -164,6 +154,21 @@ def stream_events(job: dict) -> None:
         job["status"] = "failed"
         job["error_message"] = _safe_error(exc)
         st.error(_safe_error(exc))
+
+
+def _add_agent_query_result(job_id: str, response: dict) -> None:
+    rt = response.get("result_type")
+    if rt == "single_symbol_decision":
+        state.add_decision_once(f"{job_id}:result", response.get("result") or {})
+        return
+    if rt:
+        state.add_agent_response_once(f"{job_id}:result", response)
+        return
+    if response.get("suggested_actions"):
+        state.add_agent_response_once(f"{job_id}:result", response)
+        return
+    route = response.get("route", "unknown")
+    state.add_once(f"{job_id}:result", f"**Route:** `{route}`\n\n{response.get('message', '')}")
 
 
 # ── Retry ─────────────────────────────────────────────────────────────────────
