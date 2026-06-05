@@ -97,7 +97,7 @@ class AgentRouteServices:
                 backtest_spec={"symbols": symbols, "start_date": start_date, "end_date": end_date, "strategy": strategy, "data_source": "iceberg_spark"},
                 status="disabled",
                 limitation=f"Requested date range exceeds max_date_range_days={max_days}.",
-                suggested_next_action="Narrow context.metadata.start_date/end_date or submit heavy job through /api/v1/agent/query-jobs.",
+                suggested_next_action="Narrow context.metadata.start_date/end_date or submit heavy job through /api/v1/query.",
                 warnings=warnings + [f"date range cap rejected: requested_days={days}, max_date_range_days={max_days}"],
             )
             return AgentQueryResponse(route=route.route, status="immediate", message="Backtest analysis rejected by production safety caps. No chart rendered.", symbols=symbols, result_type="backtest_analysis", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)
@@ -108,7 +108,7 @@ class AgentRouteServices:
                 backtest_spec=spec,
                 status="completed",
                 limitation="Iceberg/Spark backtest adapter returned deterministic API-safe summary. Chart rendering disabled in API.",
-                suggested_next_action="For heavy workloads, use /api/v1/agent/query-jobs.",
+                suggested_next_action="For heavy workloads, use /api/v1/query.",
                 metrics=provider_result.metrics,
                 trades_summary=provider_result.trades_summary,
                 equity_curve_sampled=provider_result.equity_curve_sampled,
@@ -119,7 +119,7 @@ class AgentRouteServices:
             backtest_spec=spec,
             status="planned",
             limitation="Iceberg/Spark backtest provider is not configured or unavailable. External market data calls are disabled in ORCA API for production safety.",
-            suggested_next_action="Configure Iceberg-backed backtest adapter or submit planned heavy workload through /api/v1/agent/query-jobs.",
+            suggested_next_action="Configure Iceberg-backed backtest adapter or submit planned heavy workload through /api/v1/query.",
             warnings=warnings,
         )
         return AgentQueryResponse(route=route.route, status="immediate", message="Backtest analysis planned only. No external market data fetched and no chart rendered.", symbols=symbols, result_type="backtest_analysis", result=result.model_dump(), suggested_actions=route.suggested_actions, router_confidence=route.confidence)

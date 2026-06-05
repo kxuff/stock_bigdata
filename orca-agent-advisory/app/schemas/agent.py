@@ -1,4 +1,5 @@
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,10 +18,21 @@ class AgentContext(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConversationMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+
+
 class AgentQueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1)
+    conversation_id: str | None = Field(default=None, max_length=128)
+    history: list[ConversationMessage] = Field(default_factory=list, max_length=20)
     context: AgentContext = Field(default_factory=AgentContext)
 
 

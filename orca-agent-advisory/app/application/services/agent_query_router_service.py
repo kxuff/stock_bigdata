@@ -20,7 +20,8 @@ class AgentQueryRouterService:
         return self._fallback(request)
 
     def _validate(self, plan: RoutedAgentQuery, request: AgentQueryRequest) -> RoutedAgentQuery:
-        symbols = _unique_symbols([*plan.symbols, *_context_symbols(request), *_extract_symbols(request.message)])
+        current_symbols = _unique_symbols([*plan.symbols, *_context_symbols(request), *_extract_symbols(request.message)])
+        symbols = current_symbols or _history_symbols(request)
         route = plan.route
         message = plan.message
         needs_clarification = plan.needs_clarification
@@ -49,7 +50,8 @@ class AgentQueryRouterService:
         )
 
     def _fallback(self, request: AgentQueryRequest) -> RoutedAgentQuery:
-        symbols = _unique_symbols([*_context_symbols(request), *_extract_symbols(request.message)])
+        current_symbols = _unique_symbols([*_context_symbols(request), *_extract_symbols(request.message)])
+        symbols = current_symbols or _history_symbols(request)
         if len(symbols) > 1:
             route = AgentRoute.SYMBOL_COMPARISON
             message = "Routing to comparison for detected symbols."
@@ -76,6 +78,21 @@ def _context_symbols(request: AgentQueryRequest) -> list[str]:
 def _extract_symbols(message: str) -> list[str]:
     ignored = {"I", "A", "THE", "AND", "OR", "FOR", "API", "SQL", "HTML", "CSS", "JSON", "CSV", "ORCA"}
     return [symbol for symbol in re.findall(r"(?<![A-Za-z0-9])([A-Z]{1,5}(?:-[A-Z])?)(?![A-Za-z0-9])", message) if symbol not in ignored]
+
+
+def _history_symbols(request: AgentQueryRequest, limit: int = 5) -> list[str]:
+    values: list[str] = []
+    for item in request.history[-limit:]:
+        metadata_symbols = item.metadata.get("symbols", [])
+        if isinstance(metadata_symbols, str):
+            values.append(metadata_symbols)
+        elif isinstance(metadata_symbols, list):
+            values.extend(str(symbol) for symbol in metadata_symbols)
+        metadata_symbol = item.metadata.get("symbol")
+        if isinstance(metadata_symbol, str):
+            values.append(metadata_symbol)
+        values.extend(_extract_symbols(item.content))
+    return _unique_symbols(values)
 
 
 def _normalize_symbol(value: str | None) -> str | None:

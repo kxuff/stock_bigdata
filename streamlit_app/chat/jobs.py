@@ -80,7 +80,7 @@ def check_backend() -> dict:
 # ── Submit ────────────────────────────────────────────────────────────────────
 
 def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
-    """Create /api/v1/agent/query-jobs async job, update session state, return error string or None."""
+    """Create /api/v1/query async job, update session state, return error string or None."""
     try:
         fetch_health()
         job = create_agent_query_job({
