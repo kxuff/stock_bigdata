@@ -182,7 +182,7 @@ services:
     ports:
       - "8085:8080"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "--fail", "http://localhost:8085/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -372,7 +372,8 @@ services:
     env_file:
       - ./orca-agent-advisory/.env
     environment:
-      NINEROUTER_KEY: ${NINEROUTER_KEY:-dummy}
+      LLM_PROVIDER: litellm
+      LLM_MODEL: openai/oc/deepseek-v4-flash-free
       LLM_BASE_URL: http://host.docker.internal:20128/v1
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
@@ -416,7 +417,8 @@ services:
     env_file:
       - ./orca-agent-advisory/.env
     environment:
-      NINEROUTER_KEY: ${NINEROUTER_KEY:-dummy}
+      LLM_PROVIDER: litellm
+      LLM_MODEL: openai/oc/deepseek-v4-flash-free
       LLM_BASE_URL: http://host.docker.internal:20128/v1
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
