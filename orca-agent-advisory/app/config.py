@@ -1,26 +1,21 @@
 import os
 from pathlib import Path
-from typing import Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 class AgentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    deepseek_api_key: SecretStr | None = None
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-v4-flash"
-    llm_provider: str = "deepseek"
-    llm_model: str | None = None
-    llm_base_url: str | None = None
+    llm_provider: str = "litellm"
+    llm_model: str = "openai/oc/deepseek-v4-flash-free"
+    llm_base_url: str = "http://localhost:20128/v1"
     llm_api_key: SecretStr | None = None
     agent_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     agent_max_retries: int = Field(default=3, ge=0)
     agent_timeout_seconds: int = Field(default=180, ge=1)
-    advisory_use_crewai_manager: bool = True
-    advisory_enable_critic_stage: bool = False
-    advisory_use_llm_critic_stage: bool = False
+    advisory_enable_critic_stage: bool = True
+    advisory_use_llm_critic_stage: bool = True
     advisory_llm_critic_timeout_seconds: int = Field(default=60, ge=1)
     advisory_output_dir: Path = Path("outputs/advisory_decisions")
     decision_job_database_url: str | None = None
@@ -29,51 +24,32 @@ class AgentSettings(BaseModel):
     agent_route_audit_table: str = "orca_agent_route_audits"
     redis_url: str | None = None
     decision_job_queue: str = "orca-decision-jobs"
-    crewai_verbose: bool = False
+    crewai_verbose: bool = True
     crewai_tracing: bool = True
-    crewai_share_crew: bool = False
+    crewai_share_crew: bool = True
     tool_result_provider: str = "bigdata"
     kafka_bootstrap_servers: str | None = None
     kafka_allowed_topics: list[str] = Field(default_factory=list)
     kafka_consumer_group: str | None = None
     kafka_inspection_timeout_seconds: float = Field(default=5.0, gt=0)
-    kafka_sample_enabled: bool = False
+    kafka_sample_enabled: bool = True
     kafka_sample_max_bytes: int = Field(default=512, ge=0, le=4096)
-
-    @field_validator("deepseek_base_url", "deepseek_model")
-    @classmethod
-    def strip_required_strings(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("value cannot be blank")
-        return cleaned
 
     @field_validator("llm_provider")
     @classmethod
     def normalize_llm_provider(cls, value: str) -> str:
         cleaned = value.strip().lower()
-        if cleaned not in {"deepseek", "openai", "openai_compatible", "litellm"}:
-            raise ValueError("llm_provider must be one of: deepseek, openai, openai_compatible, litellm")
+        if cleaned != "litellm":
+            raise ValueError("llm_provider must be: litellm")
         return cleaned
 
     @field_validator("llm_model", "llm_base_url")
     @classmethod
-    def normalize_optional_llm_string(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def normalize_llm_string(cls, value: str) -> str:
         cleaned = value.strip()
-        return cleaned or None
-
-    @model_validator(mode="after")
-    def apply_deepseek_llm_defaults(self) -> "AgentSettings":
-        if self.llm_provider == "deepseek":
-            if self.llm_model is None:
-                self.llm_model = self.deepseek_model
-            if self.llm_base_url is None:
-                self.llm_base_url = self.deepseek_base_url
-            if self.llm_api_key is None:
-                self.llm_api_key = self.deepseek_api_key
-        return self
+        if not cleaned:
+            raise ValueError("value cannot be blank")
+        return cleaned
 
     @field_validator("advisory_output_dir")
     @classmethod
@@ -89,150 +65,53 @@ class AgentSettings(BaseModel):
         return cleaned
 
 
-def load_settings(env_file: str | Path | None = ".env") -> AgentSettings:
-    values = _load_env_file(env_file) if env_file else {}
-
+def load_settings() -> AgentSettings:
     return AgentSettings(
-        deepseek_api_key=_read_env("DEEPSEEK_API_KEY", values),
-        deepseek_base_url=_read_env("DEEPSEEK_BASE_URL", values)
-        or AgentSettings.model_fields["deepseek_base_url"].default,
-        deepseek_model=_read_env("DEEPSEEK_MODEL", values)
-        or AgentSettings.model_fields["deepseek_model"].default,
-        llm_provider=(
-            _read_env("LLM_PROVIDER", values)
-            or _read_env("ORCA_LLM_PROVIDER", values)
-            or AgentSettings.model_fields["llm_provider"].default
-        ),
-        llm_model=_read_env("LLM_MODEL", values) or _read_env("ORCA_LLM_MODEL", values),
-        llm_base_url=_read_env("LLM_BASE_URL", values) or _read_env("ORCA_LLM_BASE_URL", values),
-        llm_api_key=_read_env("LLM_API_KEY", values) or _read_env("ORCA_LLM_API_KEY", values),
-        agent_temperature=float(
-            _read_env("AGENT_TEMPERATURE", values)
-            or AgentSettings.model_fields["agent_temperature"].default
-        ),
-        agent_max_retries=int(
-            _read_env("AGENT_MAX_RETRIES", values)
-            or AgentSettings.model_fields["agent_max_retries"].default
-        ),
-        agent_timeout_seconds=int(
-            _read_env("AGENT_TIMEOUT_SECONDS", values)
-            or AgentSettings.model_fields["agent_timeout_seconds"].default
-        ),
-        advisory_use_crewai_manager=_read_bool_env(
-            "ADVISORY_USE_CREWAI_MANAGER",
-            values,
-            default=AgentSettings.model_fields["advisory_use_crewai_manager"].default,
-        ),
-        advisory_enable_critic_stage=_read_bool_env(
-            "ADVISORY_ENABLE_CRITIC_STAGE",
-            values,
-            default=AgentSettings.model_fields["advisory_enable_critic_stage"].default,
-        ),
-        advisory_use_llm_critic_stage=_read_bool_env(
-            "ADVISORY_USE_LLM_CRITIC_STAGE",
-            values,
-            default=AgentSettings.model_fields["advisory_use_llm_critic_stage"].default,
-        ),
-        advisory_llm_critic_timeout_seconds=int(
-            _read_env("ADVISORY_LLM_CRITIC_TIMEOUT_SECONDS", values)
-            or AgentSettings.model_fields["advisory_llm_critic_timeout_seconds"].default
-        ),
-        advisory_output_dir=Path(
-            _read_env("ADVISORY_OUTPUT_DIR", values)
-            or AgentSettings.model_fields["advisory_output_dir"].default
-        ),
-        decision_job_database_url=_read_env("DECISION_JOB_DATABASE_URL", values)
-        or _read_env("ORCA_DECISION_JOB_DATABASE_URL", values),
-        decision_job_table=(
-            _read_env("DECISION_JOB_TABLE", values)
-            or _read_env("ORCA_DECISION_JOB_TABLE", values)
-            or AgentSettings.model_fields["decision_job_table"].default
-        ),
-        agent_route_audit_database_url=(
-            _read_env("AGENT_ROUTE_AUDIT_DATABASE_URL", values)
-            or _read_env("ORCA_AGENT_ROUTE_AUDIT_DATABASE_URL", values)
-            or _read_env("DECISION_JOB_DATABASE_URL", values)
-            or _read_env("ORCA_DECISION_JOB_DATABASE_URL", values)
-        ),
-        agent_route_audit_table=(
-            _read_env("AGENT_ROUTE_AUDIT_TABLE", values)
-            or _read_env("ORCA_AGENT_ROUTE_AUDIT_TABLE", values)
-            or AgentSettings.model_fields["agent_route_audit_table"].default
-        ),
-        redis_url=_read_env("REDIS_URL", values) or _read_env("ORCA_REDIS_URL", values),
-        decision_job_queue=(
-            _read_env("DECISION_JOB_QUEUE", values)
-            or _read_env("ORCA_DECISION_JOB_QUEUE", values)
-            or AgentSettings.model_fields["decision_job_queue"].default
-        ),
-        crewai_verbose=_read_bool_env(
-            "CREWAI_VERBOSE",
-            values,
-            default=AgentSettings.model_fields["crewai_verbose"].default,
-        ),
-        crewai_tracing=_read_bool_env(
-            "CREWAI_TRACING_ENABLED",
-            values,
-            default=AgentSettings.model_fields["crewai_tracing"].default,
-        ),
-        crewai_share_crew=_read_bool_env(
-            "CREWAI_SHARE_CREW",
-            values,
-            default=AgentSettings.model_fields["crewai_share_crew"].default,
-        ),
-        tool_result_provider=(
-            _read_env("TOOL_RESULT_PROVIDER", values)
-            or _read_env("ORCA_TOOL_RESULT_PROVIDER", values)
-            or AgentSettings.model_fields["tool_result_provider"].default
-        ),
-        kafka_bootstrap_servers=_read_env("KAFKA_BOOTSTRAP_SERVERS", values) or _read_env("ORCA_KAFKA_BOOTSTRAP_SERVERS", values),
-        kafka_allowed_topics=_read_csv_env("KAFKA_ALLOWED_TOPICS", values) or _read_csv_env("ORCA_KAFKA_ALLOWED_TOPICS", values),
-        kafka_consumer_group=_read_env("KAFKA_CONSUMER_GROUP", values) or _read_env("ORCA_KAFKA_CONSUMER_GROUP", values),
-        kafka_inspection_timeout_seconds=float(_read_env("KAFKA_INSPECTION_TIMEOUT_SECONDS", values) or _read_env("ORCA_KAFKA_INSPECTION_TIMEOUT_SECONDS", values) or AgentSettings.model_fields["kafka_inspection_timeout_seconds"].default),
-        kafka_sample_enabled=_read_bool_env("KAFKA_SAMPLE_ENABLED", values, default=AgentSettings.model_fields["kafka_sample_enabled"].default),
-        kafka_sample_max_bytes=int(_read_env("KAFKA_SAMPLE_MAX_BYTES", values) or _read_env("ORCA_KAFKA_SAMPLE_MAX_BYTES", values) or AgentSettings.model_fields["kafka_sample_max_bytes"].default),
+        llm_base_url=_read_env("LLM_BASE_URL") or AgentSettings.model_fields["llm_base_url"].default,
+        llm_api_key=_read_secret_env("NINEROUTER_KEY"),
+        agent_temperature=_read_float_env("AGENT_TEMPERATURE") or AgentSettings.model_fields["agent_temperature"].default,
+        agent_max_retries=_read_int_env("AGENT_MAX_RETRIES") or AgentSettings.model_fields["agent_max_retries"].default,
+        agent_timeout_seconds=_read_int_env("AGENT_TIMEOUT_SECONDS") or AgentSettings.model_fields["agent_timeout_seconds"].default,
+        decision_job_database_url=_read_env("ORCA_DECISION_JOB_DATABASE_URL"),
+        decision_job_queue=_read_env("ORCA_DECISION_JOB_QUEUE") or AgentSettings.model_fields["decision_job_queue"].default,
+        agent_route_audit_database_url=_read_env("ORCA_AGENT_ROUTE_AUDIT_DATABASE_URL"),
+        redis_url=_read_env("ORCA_REDIS_URL"),
+        crewai_verbose=_read_bool_env("CREWAI_VERBOSE", default=AgentSettings.model_fields["crewai_verbose"].default),
+        crewai_tracing=_read_bool_env("CREWAI_TRACING_ENABLED", default=AgentSettings.model_fields["crewai_tracing"].default),
+        crewai_share_crew=_read_bool_env("CREWAI_SHARE_CREW", default=AgentSettings.model_fields["crewai_share_crew"].default),
     )
 
 
-def _read_env(key: str, env_file_values: Mapping[str, str]) -> str | None:
-    value = os.getenv(key)
-    if value is not None:
-        return value
-    return env_file_values.get(key)
+def _read_env(key: str) -> str | None:
+    return os.getenv(key)
 
 
-def _read_bool_env(key: str, env_file_values: Mapping[str, str], *, default: bool) -> bool:
-    value = _read_env(key, env_file_values)
+def _read_secret_env(key: str) -> SecretStr | None:
+    value = _read_env(key)
+    return SecretStr(value) if value is not None else None
+
+
+def _read_bool_env(key: str, *, default: bool) -> bool:
+    value = _read_env(key)
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    cleaned = value.strip().lower()
+    if cleaned in {"1", "true", "yes", "on"}:
+        return True
+    if cleaned in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{key} must be a boolean value")
 
 
-def _read_csv_env(key: str, env_file_values: Mapping[str, str]) -> list[str]:
-    value = _read_env(key, env_file_values)
-    if not value:
-        return []
-    return [part.strip() for part in value.split(",") if part.strip()]
+def _read_float_env(key: str) -> float | None:
+    value = _read_env(key)
+    if value is None:
+        return None
+    return float(value)
 
 
-def _load_env_file(env_file: str | Path | None) -> dict[str, str]:
-    if env_file is None:
-        return {}
-
-    path = Path(env_file)
-    if not path.exists():
-        return {}
-
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip("'\"")
-        if key:
-            values[key] = value
-
-    return values
+def _read_int_env(key: str) -> int | None:
+    value = _read_env(key)
+    if value is None:
+        return None
+    return int(value)

@@ -71,7 +71,8 @@ export NINEROUTER_KEY="sk-..."
 `docker-compose.yml` passes it as:
 
 ```yaml
-LLM_API_KEY: ${NINEROUTER_KEY:-dummy}
+NINEROUTER_KEY: ${NINEROUTER_KEY:-dummy}
+LLM_BASE_URL: http://host.docker.internal:20128/v1
 ```
 
 ## Check FinBERT

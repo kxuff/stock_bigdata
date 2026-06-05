@@ -26,7 +26,7 @@ def create_audit_metadata(
     return AuditMetadata(
         run_id=run_id or f"run_{uuid.uuid4().hex}",
         request_id=request.request_id,
-        model_name=resolved_settings.deepseek_model,
+        model_name=resolved_settings.llm_model,
         temperature=resolved_settings.agent_temperature,
         input_request_hash=hash_payload(request.model_dump(mode="json")),
         tool_result_bundle_hash=hash_payload(tool_results.model_dump(mode="json", exclude_none=True)),
