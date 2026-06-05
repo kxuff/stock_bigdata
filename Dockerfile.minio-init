@@ -4,7 +4,9 @@ FROM minio/mc:latest
 COPY minio-init.sh /usr/local/bin/minio-init.sh
 
 # Make the script executable
-RUN chmod +x /usr/local/bin/minio-init.sh
+RUN tr -d '\r' < /usr/local/bin/minio-init.sh > /tmp/minio-init.sh \
+    && mv /tmp/minio-init.sh /usr/local/bin/minio-init.sh \
+    && chmod +x /usr/local/bin/minio-init.sh
 
 # Set the entrypoint to run our initialization script
-ENTRYPOINT ["/usr/local/bin/minio-init.sh"]
+ENTRYPOINT ["sh", "/usr/local/bin/minio-init.sh"]

@@ -1,5 +1,5 @@
 from app.application.use_cases.route_services import AgentRouteServices
-from app.application.services.agent_query_router_service import _extract_symbols
+from app.application.services.agent_query_router_service import AgentQueryRouterService, _extract_symbols
 from app.application.use_cases.streaming_route_services import StreamingRouteServices
 from app.application.ports.backtest_provider import BacktestProviderResult, BacktestRequest
 from app.application.ports.portfolio_provider import InMemoryPortfolioProvider
@@ -95,6 +95,15 @@ def test_symbol_comparison_enriches_rows_and_tolerates_missing_values() -> None:
 
 def test_symbol_extraction_ignores_orca_product_name() -> None:
     assert _extract_symbols("Compare AAPL and MSFT using latest ORCA predictions") == ["AAPL", "MSFT"]
+
+
+def test_router_fallback_resolves_symbol_from_history() -> None:
+    request = AgentQueryRequest(message="what about it?", history=[{"role": "user", "content": "Analyze AAPL", "metadata": {"symbol": "AAPL"}}])
+
+    routed = AgentQueryRouterService().route(request)
+
+    assert routed.route == AgentRoute.SINGLE_SYMBOL_ADVISORY
+    assert routed.symbols == ["AAPL"]
 
 
 def test_watchlist_review_includes_enriched_fields_for_null_columns() -> None:

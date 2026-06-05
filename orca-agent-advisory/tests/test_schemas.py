@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.decision import PortfolioDecision, SingleSymbolDecision
+from app.schemas.agent import AgentQueryRequest
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle, ToolResultValidationError
 
@@ -70,6 +71,25 @@ def test_missing_required_request_fields_are_rejected() -> None:
 
     with pytest.raises(ValidationError, match="request_id"):
         AdvisoryDecisionRequest.model_validate(payload)
+
+
+def test_agent_query_request_accepts_conversation_history() -> None:
+    request = AgentQueryRequest.model_validate(
+        {
+            "message": "what about it?",
+            "conversation_id": "conv-1",
+            "history": [{"role": "user", "content": "Analyze AAPL", "metadata": {"symbol": "AAPL"}, "created_at": "2026-01-02T03:04:05Z"}],
+        }
+    )
+
+    assert request.conversation_id == "conv-1"
+    assert request.history[0].role == "user"
+    assert request.history[0].metadata == {"symbol": "AAPL"}
+
+
+def test_agent_query_history_message_rejects_extra_fields() -> None:
+    with pytest.raises(ValidationError, match="extra"):
+        AgentQueryRequest.model_validate({"message": "hi", "history": [{"role": "user", "content": "Analyze AAPL", "unexpected": True}]})
 
 
 def test_single_symbol_request_rejects_multiple_symbols() -> None:

@@ -186,53 +186,32 @@ def create_advisory_decision(
         )
 
 
-@app.post("/api/v1/advisory/decision-jobs", status_code=status.HTTP_202_ACCEPTED)
-def create_advisory_decision_job(
-    request: AdvisoryDecisionRequest,
+@app.post("/api/v1/query", status_code=status.HTTP_202_ACCEPTED)
+def create_public_agent_query_job(
+    request: AgentQueryRequest,
     http_request: Request,
     background_tasks: BackgroundTasks,
+    autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
+    audit_store: AgentRouteAuditStore = Depends(get_agent_route_audit_store),
 ) -> dict[str, Any]:
-    return _create_decision_job(request, http_request, background_tasks)
+    return _create_agent_query_job(
+        request,
+        http_request,
+        background_tasks,
+        autonomous_agent_service,
+        audit_store,
+        base_path="/api/v1/jobs",
+    )
 
 
-@app.post("/api/v1/agent/query", response_model=AgentQueryResponse)
-def create_agent_query(
-    request: AgentQueryRequest,
-    http_request: Request,
-    autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
-    audit_store: AgentRouteAuditStore = Depends(get_agent_route_audit_store),
-) -> AgentQueryResponse:
-    started = time.perf_counter()
-    try:
-        response = autonomous_agent_service.query(request)
-        _record_agent_route_audit(
-            audit_store,
-            request=request,
-            http_request=http_request,
-            response=response,
-            status="succeeded",
-            latency_ms=_latency_ms(started),
-        )
-        return response
-    except Exception as exc:
-        _record_agent_route_audit(
-            audit_store,
-            request=request,
-            http_request=http_request,
-            status="failed",
-            error_code=_agent_error_code(exc),
-            latency_ms=_latency_ms(started),
-        )
-        raise
-
-
-@app.post("/api/v1/agent/query-jobs", status_code=status.HTTP_202_ACCEPTED)
-def create_agent_query_job(
+def _create_agent_query_job(
     request: AgentQueryRequest,
     http_request: Request,
     background_tasks: BackgroundTasks,
-    autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
-    audit_store: AgentRouteAuditStore = Depends(get_agent_route_audit_store),
+    autonomous_agent_service: AutonomousAgentService,
+    audit_store: AgentRouteAuditStore,
+    *,
+    base_path: str,
 ) -> dict[str, Any]:
     job_id = str(uuid4())
     now = _now_iso()
@@ -261,19 +240,27 @@ def create_agent_query_job(
         http_request.headers.get("X-Tenant-Id"),
         http_request.headers.get("X-User-Id"),
     )
-    return _job_public(job, include_links=True, base_path="/api/v1/agent/query-jobs")
+    return _job_public(job, include_links=True, base_path=base_path)
 
 
-@app.get("/api/v1/agent/query-jobs/{job_id}", response_model=None)
-def get_agent_query_job(job_id: str) -> JSONResponse | dict[str, Any]:
+@app.get("/api/v1/jobs/{job_id}", response_model=None)
+def get_public_agent_query_job(job_id: str) -> JSONResponse | dict[str, Any]:
+    return _get_agent_query_job_public(job_id, base_path="/api/v1/jobs")
+
+
+@app.get("/api/v1/jobs/{job_id}/result", response_model=None)
+def get_public_agent_query_job_result(job_id: str) -> JSONResponse | dict[str, Any]:
+    return _get_agent_query_job_result_public(job_id, base_path="/api/v1/jobs")
+
+
+def _get_agent_query_job_public(job_id: str, *, base_path: str) -> JSONResponse | dict[str, Any]:
     job = _get_job(job_id)
     if job is None:
         return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "job not found"})
-    return _job_public(job, base_path="/api/v1/agent/query-jobs")
+    return _job_public(job, base_path=base_path)
 
 
-@app.get("/api/v1/agent/query-jobs/{job_id}/result", response_model=None)
-def get_agent_query_job_result(job_id: str) -> JSONResponse | dict[str, Any]:
+def _get_agent_query_job_result_public(job_id: str, *, base_path: str) -> JSONResponse | dict[str, Any]:
     job = _get_job(job_id)
     if job is None:
         return _error_response(
@@ -295,12 +282,16 @@ def get_agent_query_job_result(job_id: str) -> JSONResponse | dict[str, Any]:
             recoverable=True,
         )
     if job["status"] != "succeeded":
-        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=_job_public(job, base_path="/api/v1/agent/query-jobs"))
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=_job_public(job, base_path=base_path))
     return job["result"]
 
 
-@app.get("/api/v1/agent/query-jobs/{job_id}/events", response_model=None)
-async def stream_agent_query_job_events(job_id: str) -> StreamingResponse:
+@app.get("/api/v1/jobs/{job_id}/events", response_model=None)
+async def stream_public_agent_query_job_events(job_id: str) -> StreamingResponse:
+    return _stream_agent_query_job_events(job_id, base_path="/api/v1/jobs")
+
+
+def _stream_agent_query_job_events(job_id: str, *, base_path: str) -> StreamingResponse:
     async def event_stream():
         previous_payload = None
         while True:
@@ -309,7 +300,7 @@ async def stream_agent_query_job_events(job_id: str) -> StreamingResponse:
                 yield _sse_event("error", {"error_code": "JOB_NOT_FOUND", "message": "job not found"})
                 return
 
-            public_job = _job_public(job, base_path="/api/v1/agent/query-jobs")
+            public_job = _job_public(job, base_path=base_path)
             payload = json.dumps(public_job, separators=(",", ":"), sort_keys=True)
             if payload != previous_payload:
                 yield _sse_event("status", public_job)
@@ -417,75 +408,6 @@ def _create_decision_job(
         tool_result_provider = get_tool_result_provider()
         background_tasks.add_task(_run_decision_job, job_id, request, decision_service, tool_result_provider)
     return _job_public(job, include_links=True)
-
-
-@app.get("/api/v1/advisory/decision-jobs/{job_id}", response_model=None)
-def get_advisory_decision_job(job_id: str) -> JSONResponse | dict[str, Any]:
-    job = _get_job(job_id)
-    if job is None:
-        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "job not found"})
-    return _job_public(job)
-
-
-@app.get("/api/v1/advisory/decision-jobs/{job_id}/result", response_model=None)
-def get_advisory_decision_job_result(job_id: str) -> JSONResponse | dict[str, Any]:
-    job = _get_job(job_id)
-    if job is None:
-        return _error_response(
-            request_id="UNKNOWN",
-            status_code=status.HTTP_404_NOT_FOUND,
-            error_code="JOB_NOT_FOUND",
-            message="job not found",
-            recoverable=False,
-        )
-    if job["status"] == "failed":
-        error = job["error"]
-        if isinstance(error, dict) and "status_code" in error and "body" in error:
-            return JSONResponse(status_code=error["status_code"], content=error["body"])
-        return _error_response(
-            request_id=job.get("request_id") or "UNKNOWN",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            error_code="INTERNAL_ERROR",
-            message=str(error) or "decision job failed",
-            recoverable=True,
-        )
-    if job["status"] != "succeeded":
-        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=_job_public(job))
-    return job["result"]
-
-
-@app.get("/api/v1/advisory/decision-jobs/{job_id}/events", response_model=None)
-async def stream_advisory_decision_job_events(job_id: str) -> StreamingResponse:
-    async def event_stream():
-        previous_payload = None
-        while True:
-            job = _get_job(job_id)
-            if job is None:
-                yield _sse_event("error", {"error_code": "JOB_NOT_FOUND", "message": "job not found"})
-                return
-
-            public_job = _job_public(job)
-            payload = json.dumps(public_job, separators=(",", ":"), sort_keys=True)
-            if payload != previous_payload:
-                yield _sse_event("status", public_job)
-                previous_payload = payload
-            else:
-                yield _sse_event("heartbeat", {"job_id": job_id, "time": _now_iso()})
-
-            if job.get("status") == "succeeded":
-                yield _sse_event("result", job.get("result") or {})
-                return
-            if job.get("status") == "failed":
-                yield _sse_event("failure", job.get("error") or {})
-                return
-
-            await asyncio.sleep(2)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 @app.get("/api/v1/data/readiness")
@@ -819,7 +741,7 @@ def _job_public(
     job: dict[str, Any],
     *,
     include_links: bool = False,
-    base_path: str = "/api/v1/advisory/decision-jobs",
+    base_path: str = "/api/v1/jobs",
 ) -> dict[str, Any]:
     public_fields = {
         "job_id",

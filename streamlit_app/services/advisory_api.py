@@ -34,14 +34,14 @@ def fetch_status(timeout: float = 3.0) -> dict[str, Any]:
 
 
 def create_agent_query_job(payload: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
-    response = requests.post(api_url("/api/v1/agent/query-jobs"), json=payload, timeout=timeout)
+    response = requests.post(api_url("/api/v1/query"), json=payload, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
 
 def stream_agent_query_job_events(job_id: str, timeout: tuple[float, float | None] = (5.0, None)):
     response = requests.get(
-        api_url(f"/api/v1/agent/query-jobs/{job_id}/events"),
+        api_url(f"/api/v1/jobs/{job_id}/events"),
         headers={"Accept": "text/event-stream"},
         stream=True,
         timeout=timeout,

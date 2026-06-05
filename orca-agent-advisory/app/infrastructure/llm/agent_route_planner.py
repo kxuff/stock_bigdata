@@ -26,7 +26,20 @@ class LiteLLMAgentRoutePlanner:
             timeout=min(self.settings.agent_timeout_seconds, 30),
             messages=[
                 {"role": "system", "content": "You are production stock advisory router. Classify into one allowed route. Use out_of_scope for non-market requests. Return JSON only matching schema."},
-                {"role": "user", "content": json.dumps({"message": request.message, "context": request.context.model_dump(), "allowed_routes": [r.value for r in AgentRoute], "schema": RoutedAgentQuery.model_json_schema()}, default=str)},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "message": request.message,
+                            "conversation_id": request.conversation_id,
+                            "history": [item.model_dump(mode="json") for item in request.history],
+                            "context": request.context.model_dump(),
+                            "allowed_routes": [r.value for r in AgentRoute],
+                            "schema": RoutedAgentQuery.model_json_schema(),
+                        },
+                        default=str,
+                    ),
+                },
             ],
         )
         return RoutedAgentQuery.model_validate(_parse_json(response["choices"][0]["message"]["content"]))
