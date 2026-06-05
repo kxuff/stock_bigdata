@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -14,6 +19,18 @@ LOCAL_CONTAINER_DATA_DIR = Path("/opt/airflow/data/eod_batch")
 MIN_PRED_A = 0.06
 MAX_RISK_PROB = 0.3
 MAX_RISK_PROB_PCT = MAX_RISK_PROB * 100
+MARKET_TZ = ZoneInfo("America/New_York")
+MARKET_CLOSE = time(16, 15)
+AUTO_REFRESH_ENV = "ML_INFERENCE_AUTO_REFRESH"
+PIPELINE_TIMEOUT_SECONDS = int(os.getenv("ML_INFERENCE_PIPELINE_TIMEOUT_SECONDS", "1800"))
+
+
+@dataclass(frozen=True)
+class InferenceAvailability:
+    expected_signal_date: date
+    prediction_path: Path | None
+    refreshed: bool
+    refresh_error: str | None = None
 
 
 def ml_inference_url() -> str | None:
@@ -31,10 +48,46 @@ def fetch_ml_inference_picks(limit: int = 25, timeout: float = 10.0) -> pd.DataF
         records = payload.get("data", payload) if isinstance(payload, dict) else payload
         return normalize_ml_inference_picks(pd.DataFrame(records), limit=limit)
 
-    prediction_path = _latest_prediction_path()
+    availability = ensure_latest_ml_inference()
+    if availability.refresh_error and availability.prediction_path is None:
+        raise RuntimeError(availability.refresh_error)
+
+    prediction_path = availability.prediction_path
     if prediction_path is None:
         return _empty_picks_frame()
     return normalize_ml_inference_picks(pd.read_parquet(prediction_path), limit=limit)
+
+
+def ensure_latest_ml_inference(today: date | None = None) -> InferenceAvailability:
+    expected_date = latest_completed_market_date(today=today)
+    prediction_path = _prediction_path_for_date(expected_date)
+    if prediction_path is not None:
+        return InferenceAvailability(expected_date, prediction_path, refreshed=False)
+
+    if os.getenv(AUTO_REFRESH_ENV, "true").lower() in {"0", "false", "no"}:
+        return InferenceAvailability(expected_date, _latest_prediction_path(), refreshed=False)
+
+    try:
+        _run_local_pipeline(expected_date)
+    except Exception as exc:
+        fallback = _latest_prediction_path()
+        return InferenceAvailability(expected_date, fallback, refreshed=False, refresh_error=str(exc))
+
+    return InferenceAvailability(expected_date, _prediction_path_for_date(expected_date), refreshed=True)
+
+
+def latest_completed_market_date(today: date | None = None, now: datetime | None = None) -> date:
+    if today is None:
+        current = now.astimezone(MARKET_TZ) if now is not None else datetime.now(MARKET_TZ)
+        candidate = current.date()
+        if current.time() < MARKET_CLOSE:
+            candidate -= timedelta(days=1)
+    else:
+        candidate = today
+
+    while not _is_market_session(candidate):
+        candidate -= timedelta(days=1)
+    return candidate
 
 
 def normalize_ml_inference_picks(frame: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
@@ -73,6 +126,39 @@ def normalize_ml_inference_picks(frame: pd.DataFrame, limit: int = 25) -> pd.Dat
     ]
     result = result.sort_values(["Date", "FinalScore"], ascending=[False, False])
     return result.head(limit).reset_index(drop=True)
+
+
+def _run_local_pipeline(run_date: date) -> None:
+    stage = _stage_dir(run_date)
+    feature_manifest = stage / "feature_manifest.json"
+    script = _repo_root() / "airflow" / "plugins" / "eod_inference" / (
+        "run_ml_only.py" if feature_manifest.exists() else "run_eod_pipeline.py"
+    )
+    args = [sys.executable, str(script), "--run-date", run_date.isoformat()]
+    env = _pipeline_env()
+
+    completed = subprocess.run(
+        args,
+        cwd=_repo_root(),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=PIPELINE_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"Unable to refresh ML inference for {run_date.isoformat()}: {detail}")
+
+
+def _pipeline_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTHONPATH", str(_repo_root() / "airflow" / "plugins"))
+    env.setdefault("US_STOCK_EOD_DATA_DIR", str(_data_dir()))
+    local_model_dir = _repo_root() / "data" / "models"
+    env.setdefault("US_STOCK_MODEL_A_PATH", str(local_model_dir / "model_a.joblib"))
+    env.setdefault("US_STOCK_MODEL_C_PATH", str(local_model_dir / "model_c.joblib"))
+    return env
 
 
 def _latest_prediction_path() -> Path | None:
@@ -120,6 +206,30 @@ def _latest_prediction_path() -> Path | None:
     return None
 
 
+def _prediction_path_for_date(signal_date: date) -> Path | None:
+    stage = _stage_dir(signal_date)
+    manifest = stage / "inference_manifest.json"
+    prediction_path = _prediction_path_from_manifest(manifest)
+    if prediction_path is not None:
+        return prediction_path
+
+    parquet_path = stage / "predictions.parquet"
+    if parquet_path.exists():
+        return parquet_path
+
+    if _data_dir() == LOCAL_CONTAINER_DATA_DIR:
+        local_stage = DEFAULT_LOCAL_DATA_DIR / "staging" / signal_date.strftime("%Y%m%d")
+        manifest = local_stage / "inference_manifest.json"
+        prediction_path = _prediction_path_from_manifest(manifest)
+        if prediction_path is not None:
+            return prediction_path
+        parquet_path = local_stage / "predictions.parquet"
+        if parquet_path.exists():
+            return parquet_path
+
+    return None
+
+
 def _prediction_path_from_manifest(path: Path) -> Path | None:
     if not path.exists():
         return None
@@ -146,6 +256,81 @@ def _fallback_local_path(path: Path) -> Path:
         return path
     suffix = Path(*parts[idx + 2 :])
     return Path(__file__).resolve().parents[2] / suffix
+
+
+def _data_dir() -> Path:
+    return Path(os.getenv("US_STOCK_EOD_DATA_DIR", str(DEFAULT_LOCAL_DATA_DIR)))
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _stage_dir(signal_date: date) -> Path:
+    return _data_dir() / "staging" / signal_date.strftime("%Y%m%d")
+
+
+def _is_market_session(value: date) -> bool:
+    if value.weekday() >= 5:
+        return False
+    return value not in _market_holidays(value.year)
+
+
+def _market_holidays(year: int) -> set[date]:
+    holidays = {
+        _observed(date(year + 1, 1, 1)),
+        _observed(date(year, 1, 1)),
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        _good_friday(year),
+        _last_weekday(year, 5, 0),
+        _observed(date(year, 6, 19)),
+        _observed(date(year, 7, 4)),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 11, 3, 4),
+        _observed(date(year, 12, 25)),
+    }
+    return {holiday for holiday in holidays if holiday.year == year}
+
+
+def _observed(value: date) -> date:
+    if value.weekday() == 5:
+        return value - timedelta(days=1)
+    if value.weekday() == 6:
+        return value + timedelta(days=1)
+    return value
+
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    current = date(year, month, 1)
+    while current.weekday() != weekday:
+        current += timedelta(days=1)
+    return current + timedelta(days=7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    current = date(year, month + 1, 1) - timedelta(days=1) if month < 12 else date(year, 12, 31)
+    while current.weekday() != weekday:
+        current -= timedelta(days=1)
+    return current
+
+
+def _good_friday(year: int) -> date:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day) - timedelta(days=2)
 
 
 def _first_existing(frame: pd.DataFrame, columns: list[str]) -> pd.Series:

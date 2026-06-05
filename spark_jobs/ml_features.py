@@ -170,6 +170,7 @@ def compute_price_features(
     if price_history.empty:
         return pd.DataFrame(columns=["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS, *ORCA_CONTEXT_COLUMNS])
 
+    price_history = _normalize_price_history_columns(price_history)
     spy_close = _daily_spy_close(spy_history)
     outputs = []
 
@@ -194,8 +195,35 @@ def compute_price_features(
     return result[["Datetime", "Symbol", *PRICE_FEATURE_COLUMNS, *ORCA_CONTEXT_COLUMNS]]
 
 
+def _normalize_price_history_columns(price_history: pd.DataFrame) -> pd.DataFrame:
+    """Accept Spark/Pandas case drift while keeping the feature contract stable."""
+    frame = price_history.copy()
+    if "Datetime" not in frame.columns and str(frame.index.name).lower() == "datetime":
+        frame = frame.reset_index()
+
+    canonical = ["Datetime", "Symbol", "Open", "High", "Low", "Close", "Volume"]
+    frame = _rename_columns_case_insensitive(frame, canonical)
+
+    missing = [name for name in canonical if name not in frame.columns]
+    if missing:
+        raise KeyError(f"Missing price history columns: {missing}. Available columns: {list(price_history.columns)}")
+
+    return frame
+
+
+def _rename_columns_case_insensitive(frame: pd.DataFrame, canonical: Iterable[str]) -> pd.DataFrame:
+    by_lower = {str(column).lower(): column for column in frame.columns}
+    rename_map = {
+        by_lower[name.lower()]: name
+        for name in canonical
+        if name not in frame.columns and name.lower() in by_lower
+    }
+    return frame.rename(columns=rename_map) if rename_map else frame
+
+
 def _daily_ohlcv(group: pd.DataFrame) -> pd.DataFrame:
     """Collapse intraday market rows to one trading-day OHLCV bar."""
+    group = _normalize_price_history_columns(group)
     group = group.sort_values("Datetime").drop_duplicates(["Datetime"], keep="last").copy()
     group["Datetime"] = pd.to_datetime(group["Datetime"], utc=True, errors="coerce").dt.tz_localize(None)
     group = group.dropna(subset=["Datetime"]).set_index("Datetime")
@@ -219,6 +247,7 @@ def _daily_ohlcv(group: pd.DataFrame) -> pd.DataFrame:
 def _daily_spy_close(spy_history: pd.DataFrame | pd.Series) -> pd.Series:
     """Return SPY daily close from either daily or intraday input."""
     if isinstance(spy_history, pd.DataFrame):
+        spy_history = _rename_columns_case_insensitive(spy_history, ["Datetime", "Close"])
         if "Datetime" in spy_history.columns:
             spy = spy_history.copy()
             spy["Datetime"] = pd.to_datetime(spy["Datetime"], utc=True, errors="coerce").dt.tz_localize(None)

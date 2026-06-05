@@ -83,9 +83,10 @@ def ensure_tables(spark: SparkSession) -> None:
     )
     spark.sql(
         f"""
-        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_news_v2 (
+        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_news_v3 (
             Datetime timestamp,
             Symbol string,
+            id long,
             headline string,
             source string,
             url string,
@@ -96,7 +97,7 @@ def ensure_tables(spark: SparkSession) -> None:
         )
         USING iceberg
         PARTITIONED BY (days(Datetime), Symbol)
-        LOCATION 's3a://silver/stock_news_v2'
+        LOCATION 's3a://silver/stock_news_v3'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
@@ -181,11 +182,12 @@ def market_indicator_silver_stream(spark: SparkSession):
     )
     
 def news_silver_stream(spark: SparkSession):
-    bronze = spark.readStream.format("iceberg").load(f"{CATALOG}.bronze.stock_news")
+    bronze = spark.readStream.format("iceberg").load(f"{CATALOG}.bronze.stock_news_v2")
     clean = (
         bronze.select(
             "Datetime",
             trim(col("Symbol")).alias("Symbol"),
+            "id",
             lower(trim(col("category"))).alias("category"),
             trim(col("headline")).alias("headline"),
             trim(col("source")).alias("source"),
@@ -203,6 +205,7 @@ def news_silver_stream(spark: SparkSession):
     return clean.select(
         "Datetime",
         "Symbol",
+        "id",
         "headline",
         "source",
         "url",
@@ -277,8 +280,8 @@ if __name__ == "__main__":
             ),
             write_iceberg_stream(
                 news_silver_stream(spark),
-                f"{CATALOG}.silver.stock_news_v2",
-                f"{CHECKPOINT_BASE}/stock_news_v2",
+                f"{CATALOG}.silver.stock_news_v3",
+                f"{CHECKPOINT_BASE}/stock_news_v3",
                 "stock_news"
             ),
         ])

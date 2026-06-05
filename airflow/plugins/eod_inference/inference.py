@@ -16,13 +16,7 @@ from eod_inference.utils import parse_date, read_parquet, stage_dir, write_json
 
 
 def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
-    """Score the feature batch and write the Streamlit stock-pick contract.
-
-    The returned manifest points to `prediction_batch`, a parquet file with
-    Datetime/Symbol plus entry_price, pred_a, risk_prob, and final_score.
-    Streamlit normalizes these fields to Date, Ticker, Entry_Price, Pred_A,
-    Risk_Prob_%, and FinalScore for the AI Stock Picks page.
-    """
+    """Score the feature batch and write the Streamlit stock-pick contract."""
     config = PipelineConfig.from_env()
     target_date = parse_date(feature_manifest["as_of_date"])
     feature_manifest = _with_agent_context(feature_manifest, target_date.isoformat())
@@ -32,14 +26,19 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
 
     model_a = _load_model_artifact(config.model_a_path, required=True)
     model_c = _load_model_artifact(config.model_c_path, required=config.require_risk_model)
-    _validate_model_columns(model_a, PRICE_FEATURE_COLUMNS, "Model A")
-    if model_c is not None:
-        _validate_model_columns(model_c, PRICE_FEATURE_COLUMNS, "Model C")
 
-    x = features[list(PRICE_FEATURE_COLUMNS)].astype(float)
-    pred_a = np.asarray(model_a["model"].predict(x), dtype=float)
+    expected_features = _artifact_feature_columns(model_a, "Model A")
+    _validate_model_columns(model_a, expected_features, "Model A")
+    if model_c is not None:
+        _validate_model_columns(model_c, expected_features, "Model C")
+
+    # Match the Kaggle notebook: one feature matrix, ordered by model A's
+    # training contract, feeds both Model A and Model C.
+    x_test_model = features.reindex(columns=expected_features).astype(float)
+    pred_a = np.asarray(model_a["model"].predict(x_test_model), dtype=float)
     _validate_upside_output(pred_a, "Model A")
-    risk_prob = _predict_risk(model_c, x)
+
+    risk_prob = _predict_risk(model_c, x_test_model)
     if risk_prob is None:
         risk_prob = np.full(shape=len(pred_a), fill_value=np.nan, dtype=float)
 
@@ -50,7 +49,7 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
     output["risk_prob"] = risk_prob
     output["final_score"] = np.where(np.isnan(risk_prob), pred_a, pred_a * (1 - risk_prob))
     output["feature_version"] = feature_manifest["feature_version"]
-    output["source_feature_process_date"] = features["process_date"]
+    output["source_feature_process_date"] = features.get("process_date", pd.NaT)
     output["process_date"] = pd.Timestamp.utcnow().tz_localize(None)
 
     batch_path = stage_dir(config, target_date) / "predictions.parquet"
@@ -72,6 +71,13 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
     }
     write_json(stage_dir(config, target_date) / "inference_manifest.json", manifest)
     return manifest
+
+
+def _artifact_feature_columns(artifact: dict[str, Any], name: str) -> list[str]:
+    feature_columns = artifact.get("feature_columns")
+    if not feature_columns:
+        raise PipelineValidationError(f"{name} artifact must include feature_columns.")
+    return list(feature_columns)
 
 
 def _load_model_artifact(path: Path | None, *, required: bool) -> dict[str, Any] | None:

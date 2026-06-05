@@ -2,13 +2,20 @@ from __future__ import annotations
 
 from datetime import date
 
+import pandas as pd
 import streamlit as st
 
 from services.backtest_api import DEFAULT_SYMBOLS, build_equity_figure, run_strategy_backtest
-from services.ml_inference_api import MAX_RISK_PROB_PCT, MIN_PRED_A, fetch_ml_inference_picks
+from services.ml_inference_api import (
+    MAX_RISK_PROB_PCT,
+    MIN_PRED_A,
+    ensure_latest_ml_inference,
+    normalize_ml_inference_picks,
+)
 
 
 st.set_page_config(page_title="AI Stock Picks", page_icon="⭐", layout="wide")
+BACKTEST_CACHE_VERSION = "cr_metric_v2"
 
 st.markdown("""
 <style>
@@ -35,11 +42,28 @@ with st.expander("Output contract"):
         """
     )
 
-try:
-    picks = fetch_ml_inference_picks(limit=100)
-except Exception as exc:
-    st.warning(f"Cannot load ML inference output: {exc}")
-    picks = None
+with st.spinner("Checking latest EOD signal batch..."):
+    try:
+        availability = ensure_latest_ml_inference()
+        if availability.prediction_path is None:
+            picks = None
+        else:
+            picks = normalize_ml_inference_picks(pd.read_parquet(availability.prediction_path), limit=100)
+    except Exception as exc:
+        availability = None
+        st.warning(f"Cannot load ML inference output: {exc}")
+        picks = None
+
+if availability is not None:
+    status = f"Expected latest signal date: `{availability.expected_signal_date.isoformat()}`."
+    if availability.prediction_path is not None:
+        status += f" Reading `{availability.prediction_path}`."
+    if availability.refreshed:
+        st.success(status + " Refreshed automatically.")
+    elif availability.refresh_error:
+        st.warning(status + f" Auto-refresh failed: {availability.refresh_error}")
+    else:
+        st.caption(status)
 
 if picks is not None and not picks.empty:
     dates = sorted(picks["Date"].dropna().unique(), reverse=True)
@@ -105,6 +129,7 @@ def _run_cached_backtest(
     max_risk_prob: float,
     stop_loss: float,
     horizon_days: int,
+    cache_version: str,
 ):
     return run_strategy_backtest(
         test_start=test_start,
@@ -151,6 +176,7 @@ if run_backtest:
                 max_risk_prob=float(max_risk_prob),
                 stop_loss=float(stop_loss),
                 horizon_days=int(horizon_days),
+                cache_version=BACKTEST_CACHE_VERSION,
             )
         except Exception as exc:
             st.error(f"Backtest failed: {exc}")
@@ -158,6 +184,12 @@ if run_backtest:
 
     if result is not None:
         metrics = result.metrics
+        strategy_total_return = metrics.get("strategy_total_return")
+        if strategy_total_return is None and not result.equity_curve.empty:
+            strategy_total_return = float(result.equity_curve["Strategy"].iloc[-1] * 100)
+        if strategy_total_return is None:
+            strategy_total_return = float("nan")
+
         metric_cols = st.columns(5)
         metric_cols[0].metric("Trades", f"{metrics['trade_count']:,}")
         metric_cols[1].metric("Win Rate", "n/a" if metrics["win_rate"] != metrics["win_rate"] else f"{metrics['win_rate']:.2f}%")
@@ -165,7 +197,10 @@ if run_backtest:
             "Avg Trade",
             "n/a" if metrics["avg_return_per_trade"] != metrics["avg_return_per_trade"] else f"{metrics['avg_return_per_trade']:.2f}%",
         )
-        metric_cols[3].metric("Raw Strategy", f"{metrics['raw_strategy_return']:.2f}%")
+        metric_cols[3].metric(
+            "AI Stock Pick CR",
+            "n/a" if strategy_total_return != strategy_total_return else f"{strategy_total_return:.2f}%",
+        )
         metric_cols[4].metric(
             "SPY Buy & Hold",
             "n/a" if metrics["spy_total_return"] != metrics["spy_total_return"] else f"{metrics['spy_total_return']:.2f}%",
