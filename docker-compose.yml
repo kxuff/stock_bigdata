@@ -14,7 +14,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW__WEBSERVER__SECRET_KEY: "your-secret-key-here"
     AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark-master", "port": 7077, "extra": {"queue": "root.default"}}'
-    FINBERT_API_URL: ${FINBERT_API_URL:-https://parrot-sublease-preamble.ngrok-free.dev}
+    FINBERT_API_URL: ${FINBERT_API_URL:?FINBERT_API_URL is required for EOD sentiment scoring}
     FINBERT_API_TIMEOUT: ${FINBERT_API_TIMEOUT:-10}
     PATH: "/home/airflow/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
   volumes:
@@ -339,7 +339,7 @@ services:
       - "19120:19120"
     environment:
       QUARKUS_PROFILE: prod
-      # --- CHUYỂN TỪ ROCKSDB SANG JDBC (POSTGRES) ---
+      # Store Nessie metadata in Postgres.
       NESSIE_VERSION_STORE_TYPE: JDBC
       QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://postgres-nessie:5432/nessie
       QUARKUS_DATASOURCE_USERNAME: nessie
@@ -351,7 +351,7 @@ services:
       QUARKUS_S3_AWS_CREDENTIALS_TYPE: static
       QUARKUS_S3_AWS_CREDENTIALS_STATIC_PROVIDER_ACCESS_KEY_ID: admin
       QUARKUS_S3_AWS_CREDENTIALS_STATIC_PROVIDER_SECRET_ACCESS_KEY: password
-    # XÓA block volumes mapping vào /nessie/data vì không dùng RocksDB nữa
+    # Do not map local volumes into /nessie/data; Nessie uses Postgres storage here.
     depends_on:
       - minio-init
       - postgres-nessie
@@ -375,6 +375,7 @@ services:
       LLM_PROVIDER: litellm
       LLM_MODEL: openai/oc/deepseek-v4-flash-free
       LLM_BASE_URL: http://host.docker.internal:20128/v1
+      LLM_API_KEY: ${NINEROUTER_KEY:?NINEROUTER_KEY is required for ORCA LLM gateway}
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
       ORCA_SPARK_MASTER: local[2]
@@ -394,6 +395,12 @@ services:
       CREWAI_VERBOSE: "true"
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     restart: always
     depends_on:
       - spark-master
@@ -420,6 +427,7 @@ services:
       LLM_PROVIDER: litellm
       LLM_MODEL: openai/oc/deepseek-v4-flash-free
       LLM_BASE_URL: http://host.docker.internal:20128/v1
+      LLM_API_KEY: ${NINEROUTER_KEY:?NINEROUTER_KEY is required for ORCA LLM gateway}
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
       ORCA_SPARK_MASTER: local[2]

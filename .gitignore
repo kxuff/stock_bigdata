@@ -1,7 +1,9 @@
 .env
+.streamlit/secrets.toml
 *venv/
 __pycache__/
 ivy2/
+.run/
 
 data/eod_batch
 

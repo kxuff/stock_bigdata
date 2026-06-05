@@ -1,87 +1,109 @@
-# End-to-End Local Runbook
+# End-to-End Local Demo Runbook
 
-Run local stock platform from data collection/backfill to ORCA advisory output.
+Run the local ORCA stock demo from EOD ingestion to advisory UI.
 
-This runbook assumes dev/local Docker Compose. It uses 3 symbols for faster demo:
+Default demo symbols:
 
 ```text
 AAPL,MSFT,NVDA
 ```
 
-Remove `US_STOCK_EOD_SYMBOLS` to run all default symbols.
-
-## 0. Repositories
-
-Expected folders:
+Default run date:
 
 ```text
-/home/ming/Desktop/bigdata/stock_bigdata
-/home/ming/Desktop/bigdata/orca-agent-advisory
+2026-05-29
 ```
 
-## 1. Start Docker stack
+## 1. Requirements
 
-From `stock_bigdata`:
+- Docker Desktop with Compose.
+- Host Python for root tests.
+- `uv` for ORCA tests.
+- Live FinBERT HTTP API. `FINBERT_API_URL` is required; there is no offline lexical fallback.
+- Live ORCA LLM gateway key through `NINEROUTER_KEY`.
 
-```bash
-cd /home/ming/Desktop/bigdata/stock_bigdata
-docker compose up -d
-docker compose ps
+## 2. One-Command Demo, Windows PowerShell
+
+From the repository root:
+
+```powershell
+$env:FINBERT_API_URL='https://your-finbert-url'
+$env:NINEROUTER_KEY='sk-...'
+
+.\scripts\reset_and_run_local.ps1 `
+  -ResetDocker `
+  -RemoveLocalData `
+  -FinbertUrl $env:FINBERT_API_URL `
+  -NinerouterKey $env:NINEROUTER_KEY
 ```
 
-Required services:
+What the script does:
 
 ```text
-airflow-webserver
-airflow-scheduler
-spark-master
-spark-worker
-minio
-nessie
-postgres-airflow
-broker
+1. Keeps model artifacts under data/models.
+2. Deletes only generated demo data: data/eod_batch, airflow/logs, ivy2.
+3. Starts Docker services.
+4. Checks FinBERT /health and fails early if unavailable.
+5. Checks the ORCA LLM key and fails early if missing.
+6. Runs EOD initial load for AAPL,MSFT,NVDA on 2026-05-29.
+7. Starts orca-api and orca-worker.
+8. Verifies /healthz, /api/v1/status, /api/v1/data/readiness, /api/v1/data/coverage, and /api/v1/advisory/picks.
 ```
 
-## 2. First run: build history + predictions + ORCA context
+Override demo inputs when needed:
 
-First run must use initial backfill because feature engineering needs enough lookback history.
+```powershell
+.\scripts\reset_and_run_local.ps1 `
+  -FinbertUrl $env:FINBERT_API_URL `
+  -NinerouterKey $env:NINEROUTER_KEY `
+  -Symbols 'AAPL,MSFT,NVDA' `
+  -RunDate '2026-05-29'
+```
+
+## 3. Bash Equivalent
 
 ```bash
-cd /home/ming/Desktop/bigdata/stock_bigdata
+export FINBERT_API_URL='https://your-finbert-url'
+export NINEROUTER_KEY='sk-...'
+
+docker compose up -d --build
+
+curl -H 'ngrok-skip-browser-warning: 1' "$FINBERT_API_URL/health"
 
 docker compose exec -T \
   -e PYTHONPATH='/opt/airflow/plugins' \
+  -e US_STOCK_EOD_DATA_DIR='/opt/airflow/data/eod_batch' \
   -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' \
   -e US_STOCK_SPARK_EXECUTOR_CORES='1' \
   -e US_STOCK_SPARK_CORES_MAX='1' \
   -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' \
   -e US_STOCK_INITIAL_LOAD='true' \
   -e US_STOCK_BACKFILL_CALENDAR_DAYS='500' \
-  -e FINBERT_API_URL='https://parrot-sublease-preamble.ngrok-free.dev' \
-  -e FINBERT_API_TIMEOUT='3' \
-  airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py \
-  --run-date 2026-05-29
+  -e FINBERT_API_URL="$FINBERT_API_URL" \
+  -e FINBERT_API_TIMEOUT='10' \
+  airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py --run-date 2026-05-29
+
+docker compose up -d --build orca-api orca-worker
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/api/v1/status
+curl 'http://127.0.0.1:8000/api/v1/data/readiness?symbols=AAPL&decision_mode=single_symbol_advisory'
+curl 'http://127.0.0.1:8000/api/v1/data/coverage?symbols=AAPL,MSFT,NVDA'
+curl 'http://127.0.0.1:8000/api/v1/advisory/picks?limit=25&min_pred_a=0.06&max_risk_prob=0.3'
 ```
 
-What this command does:
+## 4. EOD Pipeline Output
+
+Pipeline stages:
 
 ```text
 extract_eod_prices
-→ clean_validate_prices
-→ engineer_features
-→ run_ml_inference
-→ save_predictions
+-> clean_validate_prices
+-> engineer_features
+-> run_ml_inference
+-> save_predictions
 ```
 
-`run_ml_inference()` auto-builds sentiment and valuation context when missing, then writes ORCA upstream context. `save_predictions()` also persists full upstream ORCA layers to Iceberg:
-
-```text
-nessie.ml_ready.stock_predictions
-nessie.ml_ready.stock_sentiment_context
-nessie.ml_ready.stock_valuation_context
-```
-
-Expected output shape:
+Expected manifest shape:
 
 ```json
 {
@@ -100,192 +122,96 @@ Expected output shape:
   "sentiment_rows": 3,
   "valuation_rows": 3,
   "orca_upstream_context": "/opt/airflow/data/eod_batch/staging/20260529/orca_upstream.json",
-  "prediction_table": "nessie.ml_ready.stock_predictions"
+  "prediction_table": "nessie.ml_ready.stock_predictions_v2"
 }
 ```
 
-Host path for advisory input:
+Host-visible staging path:
 
 ```text
-/home/ming/Desktop/bigdata/stock_bigdata/data/eod_batch/staging/20260529/orca_upstream.json
+data/eod_batch/staging/20260529
 ```
 
-## 3. Later runs: incremental mode
+## 5. Iceberg Tables
 
-After history exists, remove initial-load flags:
-
-```bash
-cd /home/ming/Desktop/bigdata/stock_bigdata
-
-docker compose exec -T \
-  -e PYTHONPATH='/opt/airflow/plugins' \
-  -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' \
-  -e US_STOCK_SPARK_EXECUTOR_CORES='1' \
-  -e US_STOCK_SPARK_CORES_MAX='1' \
-  -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' \
-  -e FINBERT_API_URL='https://parrot-sublease-preamble.ngrok-free.dev' \
-  -e FINBERT_API_TIMEOUT='3' \
-  airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py \
-  --run-date 2026-05-29
+```text
+nessie.ml_ready.stock_predictions_v2
+nessie.ml_ready.stock_price_features
+nessie.curated.us_stock_eod_prices
+nessie.ml_ready.stock_sentiment_context
+nessie.ml_ready.stock_valuation_context
 ```
 
-If incremental run fails with not enough lookback history, rerun first-run command with:
+ORCA reads Iceberg/Nessie/MinIO directly. The removed deterministic `orca_upstream.json` CLI path is not used by runtime advisory APIs.
 
-```bash
--e US_STOCK_INITIAL_LOAD='true'
--e US_STOCK_BACKFILL_CALENDAR_DAYS='500'
-```
+## 6. ORCA Runtime Env
 
-## 4. Run ORCA advisory with live agents
-
-From `orca-agent-advisory`:
-
-```bash
-cd /home/ming/Desktop/bigdata/orca-agent-advisory
-uv run uvicorn app.main:app --reload
-```
-
-In another terminal, call API:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/advisory/decision \
-  -H 'Content-Type: application/json' \
-  --data @samples/normal_request.json
-```
-
-Set `ORCA_TOOL_RESULT_PROVIDER=bigdata` to read Spark/Iceberg data. Production runtime supports only bigdata provider; sample tool-result fixtures remain contract fixtures only. Deterministic upstream CLI removed; runtime advisory path must use ORCA agent service.
-
-Full upstream layer env:
+`docker-compose.yml` sets the local demo defaults:
 
 ```env
 ORCA_TOOL_RESULT_PROVIDER=bigdata
 ORCA_ICEBERG_CATALOG=nessie
-ORCA_ML_PREDICTION_TABLE=ml_ready.stock_predictions
+ORCA_SPARK_MASTER=local[2]
+ORCA_ML_PREDICTION_TABLE=ml_ready.stock_predictions_v2
 ORCA_ML_FEATURE_TABLE=ml_ready.stock_price_features
 ORCA_CURATED_PRICE_TABLE=curated.us_stock_eod_prices
 ORCA_SENTIMENT_TABLE=ml_ready.stock_sentiment_context
 ORCA_VALUATION_TABLE=ml_ready.stock_valuation_context
 ```
 
-Expected output fields:
+## 7. Public Demo APIs
 
 ```text
-symbol
-recommendation
-confidence
-requires_human_review
-decision_rationale
-supporting_signals
-conflicting_signals
-risk_warnings
+GET /api/v1/data/readiness?symbols=AAPL&decision_mode=single_symbol_advisory
+GET /api/v1/data/coverage?symbols=AAPL,MSFT,NVDA
+GET /api/v1/advisory/picks?limit=25&min_pred_a=0.06&max_risk_prob=0.3
+GET /api/v1/advisory/picks/AAPL
+POST /api/v1/advisory/decision
+POST /api/v1/agent/query-jobs
 ```
 
-Output file is written under:
+## 8. Streamlit
 
-```text
-/home/ming/Desktop/bigdata/orca-agent-advisory/outputs/advisory_decisions
+```powershell
+pip install -r streamlit_app/requirements.txt
+streamlit run streamlit_app/app.py
 ```
 
-## 5. Optional: run all default symbols
+AI Chat checks ORCA API health and data coverage before submitting. AI Stock Picks prefers `/api/v1/advisory/picks` and falls back to local parquet only for dev/offline inspection.
 
-Remove this line from EOD command:
+## 9. Demo Checklist
 
-```bash
--e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA'
-```
+- Docker stack is up.
+- FinBERT `/health` returns OK.
+- EOD initial load completed for `AAPL,MSFT,NVDA`.
+- `/healthz` and `/api/v1/status` return OK.
+- `/api/v1/data/readiness` returns ready for at least `AAPL`.
+- `/api/v1/data/coverage` reports market, ML, and risk ready for demo symbols.
+- `/api/v1/advisory/picks` returns ranked rows or a clear no-prediction warning.
+- Streamlit AI Chat can submit an ORCA job for a ready symbol.
+- Streamlit AI Stock Picks can create an ORCA agent query job from a pick.
 
-This is slower, but closer to full demo scope.
+## 10. Known Limitations
 
-## 6. Required: FinBERT server
+- Streaming `ml.stock_predictions` remains read-only in this phase; there is no realtime ML prediction writer yet.
+- Production auth, decision history UI, and realtime prediction writing are deferred.
+- Demo requires live FinBERT and live LLM gateway credentials.
 
-`FINBERT_API_URL` is required for sentiment scoring. If FinBERT/ngrok is unavailable, EOD sentiment context fails fast. There is no lexical fallback.
+## 11. Troubleshooting
 
-Sentiment source refs always cite both `yfinance.news:{symbol}` and `finbert:ProsusAI/finbert` when sentiment rows are produced.
+Spark executor stuck or no resources:
 
-## 7. Troubleshooting
-
-### Spark executor stuck / no resources
-
-Restart Spark services:
-
-```bash
-cd /home/ming/Desktop/bigdata/stock_bigdata
+```powershell
 docker compose restart spark-master spark-worker
 ```
 
-Then smoke test:
+Quick Spark smoke test:
 
-```bash
-docker compose exec -T \
-  -e PYTHONPATH='/opt/airflow/plugins' \
-  -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' \
-  -e US_STOCK_SPARK_EXECUTOR_CORES='1' \
-  -e US_STOCK_SPARK_CORES_MAX='1' \
-  airflow-webserver python - <<'PY'
-from eod_inference.iceberg import build_spark, stop_spark
-
-spark = build_spark()
-try:
-    print('count', spark.range(5).count())
-finally:
-    stop_spark(spark)
-PY
-```
-
-Expected:
-
-```text
-count 5
-```
-
-### Missing sentiment/valuation in ORCA context
-
-Check output contains:
-
-```text
-sentiment_snapshot
-valuation_snapshot
-```
-
-If missing, verify current branch/code has:
-
-```text
-airflow/plugins/eod_inference/agent_context.py
-airflow/plugins/eod_inference/orca_context.py
-airflow/plugins/eod_inference/run_eod_pipeline.py
-```
-
-### Not enough lookback history
-
-Error shape:
-
-```text
-Not enough lookback history for feature inference. Required 260
-```
-
-Fix: run initial load again:
-
-```bash
--e US_STOCK_INITIAL_LOAD='true'
--e US_STOCK_BACKFILL_CALENDAR_DAYS='500'
-```
-
-### Airflow webserver unhealthy
-
-For manual `docker compose exec`, webserver health can be unhealthy while Python commands still work. If commands fail, restart:
-
-```bash
-docker compose restart airflow-webserver airflow-scheduler
-```
-
-## 8. Quick validation commands
-
-```bash
-cd /home/ming/Desktop/bigdata/stock_bigdata
-python -m compileall airflow/plugins/eod_inference spark_jobs
-```
-
-```bash
-cd /home/ming/Desktop/bigdata/orca-agent-advisory
-uv run pytest
+```powershell
+docker compose exec -T `
+  -e PYTHONPATH='/opt/airflow/plugins' `
+  -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' `
+  -e US_STOCK_SPARK_EXECUTOR_CORES='1' `
+  -e US_STOCK_SPARK_CORES_MAX='1' `
+  airflow-webserver python -c "from eod_inference.iceberg import build_spark, stop_spark; s=build_spark(); print('count', s.range(5).count()); stop_spark(s)"
 ```

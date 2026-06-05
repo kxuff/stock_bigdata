@@ -53,6 +53,41 @@ def fetch_readiness(symbols: list[str], decision_mode: str = "single_symbol_advi
     return response.json()
 
 
+def fetch_data_coverage(symbols: list[str], decision_mode: str = "single_symbol_advisory", timeout: float = 10.0) -> dict[str, Any]:
+    response = requests.get(
+        api_url("/api/v1/data/coverage"),
+        params={"symbols": ",".join(symbols), "decision_mode": decision_mode},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_advisory_picks(
+    limit: int = 25,
+    min_pred_a: float = 0.06,
+    max_risk_prob: float = 0.3,
+    as_of_date: str | None = None,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "limit": limit,
+        "min_pred_a": min_pred_a,
+        "max_risk_prob": max_risk_prob,
+    }
+    if as_of_date:
+        params["as_of_date"] = as_of_date
+    response = requests.get(api_url("/api/v1/advisory/picks"), params=params, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_advisory_pick_detail(symbol: str, timeout: float = 10.0) -> dict[str, Any]:
+    response = requests.get(api_url(f"/api/v1/advisory/picks/{symbol}"), timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
 def create_decision_job(payload: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
     response = requests.post(api_url("/api/v1/advisory/decision-jobs"), json=payload, timeout=timeout)
     response.raise_for_status()

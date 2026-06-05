@@ -17,16 +17,18 @@ Backfill is controlled manually with the Airflow Variable `US_STOCK_INITIAL_LOAD
 
 ## Streamlit AI Stock Picks contract
 
-`run_ml_inference()` writes `predictions.parquet` under the EOD staging directory. The Streamlit AI Stock Picks page reads the latest batch locally, or from `ML_INFERENCE_PICKS_URL` when an external endpoint is configured, and displays this normalized contract:
+`run_ml_inference()` writes `predictions.parquet` under the EOD staging directory. The Streamlit AI Stock Picks page prefers the ORCA `/api/v1/advisory/picks` endpoint, falls back to `ML_INFERENCE_PICKS_URL` when explicitly configured, and uses local parquet only for dev/offline inspection. It displays this normalized contract:
 
 | Column | Meaning |
 | --- | --- |
-| `Date` | Ngày phát sinh tín hiệu mua. |
-| `Ticker` | Mã cổ phiếu. |
-| `Entry_Price` | Giá mua đề xuất tại thời điểm tín hiệu, sourced from `Close` in the feature batch. |
-| `Pred_A` | Mức tăng giá dự báo bởi mô hình, dạng thập phân. Ví dụ `0.0885` tương ứng dự báo tăng `8.85%`. |
-| `Risk_Prob_%` | Chỉ số rủi ro dự báo của mô hình, hiển thị theo phần trăm. |
-| `FinalScore` | Điểm xếp hạng cuối cùng, computed as `Pred_A * (1 - RiskProb)` when risk is available. |
+| `Date` | Signal date. |
+| `Ticker` | Stock symbol. |
+| `Entry_Price` | Proposed entry/reference price, usually sourced from `Close` in the feature batch. |
+| `Pred_A` | Model upside signal as a decimal. Example: `0.0885` means predicted upside of `8.85%`. |
+| `Risk_Prob_%` | Model risk probability displayed as a percent. |
+| `FinalScore` | Final ranking score, computed as `Pred_A * (1 - RiskProb)` when risk is available. |
+| `Ready` | Whether required market, ML, and risk context is complete for demo use. |
+| `Warnings` | Data-quality or exclusion reasons for a row. |
 
 Local Streamlit config options:
 
@@ -57,11 +59,11 @@ Important Airflow Variables:
 | `US_STOCK_RAW_PRICE_TABLE` | `raw.us_stock_eod_prices` |
 | `US_STOCK_CURATED_PRICE_TABLE` | `curated.us_stock_eod_prices` |
 | `US_STOCK_ML_READY_FEATURE_TABLE` | `ml_ready.stock_price_features` |
-| `US_STOCK_ML_READY_PREDICTION_TABLE` | `ml_ready.stock_predictions` |
+| `US_STOCK_ML_READY_PREDICTION_TABLE` | `ml_ready.stock_predictions_v2` |
 | `US_STOCK_RAW_PRICE_LOCATION` | `s3a://bronze/raw/us_stock_eod_prices` |
 | `US_STOCK_CURATED_PRICE_LOCATION` | `s3a://silver/curated/us_stock_eod_prices` |
 | `US_STOCK_ML_READY_FEATURE_LOCATION` | `s3a://prediction/ml_ready/stock_price_features` |
-| `US_STOCK_ML_READY_PREDICTION_LOCATION` | `s3a://prediction/ml_ready/stock_predictions` |
+| `US_STOCK_ML_READY_PREDICTION_LOCATION` | `s3a://prediction/ml_ready/stock_predictions_v2` |
 | `ML_FEATURE_VERSION` | `price_v1_notebook_ac` |
 
 Implementation files:

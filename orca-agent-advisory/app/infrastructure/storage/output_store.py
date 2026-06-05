@@ -23,6 +23,7 @@ class DecisionOutputStore:
         tool_results: ToolResultBundle,
         manager_synthesis: ManagerSynthesisOutput,
         decision: DecisionResult,
+        revision_attempts: list[dict] | None = None,
     ) -> Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         path = self.output_dir / f"{decision.run_id}.json"
@@ -31,6 +32,7 @@ class DecisionOutputStore:
             "tool_results": tool_results.model_dump(mode="json", exclude_none=True),
             "manager_synthesis": manager_synthesis.model_dump(mode="json"),
             "final_decision": decision.model_dump(mode="json"),
+            "revision_attempts": revision_attempts or [],
         }
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False),

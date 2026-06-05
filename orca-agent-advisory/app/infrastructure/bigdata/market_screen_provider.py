@@ -12,12 +12,14 @@ class BigdataMarketScreenProvider:
         if self.table_config is None:
             self.table_config = BigdataMlTableConfig(spark_app_name="orca-market-screen-provider")
 
-    def screen_latest(self, limit: int = 10) -> list[dict[str, Any]]:
+    def screen_latest(self, limit: int = 10, as_of_date: str | None = None) -> list[dict[str, Any]]:
         from pyspark.sql import Window, functions as F, SparkSession  # type: ignore[import-not-found]
 
         try:
             spark = _build_spark_session(SparkSession.builder, self.table_config.spark_app_name or "orca-market-screen-provider", self.table_config)
             p = spark.table(self.table_config.table_ref(self.table_config.prediction_table))
+            if as_of_date:
+                p = p.where(F.to_date(F.col("Datetime")) <= F.lit(str(as_of_date)))
             latest_date = p.agg(F.max("Datetime").alias("max_datetime")).collect()[0]["max_datetime"]
             if latest_date is None:
                 return []
@@ -28,7 +30,7 @@ class BigdataMarketScreenProvider:
                 .where(F.col("rank") <= int(limit))
                 .limit(int(limit))
             )
-            top = self._enrich(spark, top)
+            top = self._enrich(spark, top, as_of_date=as_of_date)
             return [row.asDict(recursive=True) for row in top.collect()]
         except Exception:  # noqa: BLE001 - route must fail soft when lakehouse table is absent.
             return []
@@ -54,14 +56,16 @@ class BigdataMarketScreenProvider:
         except Exception:  # noqa: BLE001 - route must fail soft when lakehouse table is absent.
             return []
 
-    def _enrich(self, spark, df):
+    def _enrich(self, spark, df, *, as_of_date: str | None = None):
         """Enrich predictions with latest_price and technical indicators (best-effort)."""
         from pyspark.sql import Window, functions as F  # type: ignore[import-not-found]
 
-        # ── 1. latest_price from curated EOD prices ──────────────────────────
+        # 1. latest_price from curated EOD prices.
         try:
             price_tbl = self.table_config.table_ref("curated.us_stock_eod_prices")
             prices = spark.table(price_tbl)
+            if as_of_date:
+                prices = prices.where(F.to_date(F.col("Datetime")) <= F.lit(str(as_of_date)))
             w_p = Window.partitionBy("Symbol").orderBy(F.col("Datetime").desc())
             latest_price = (
                 prices.select("Symbol", "Close", "Datetime")
@@ -74,10 +78,12 @@ class BigdataMarketScreenProvider:
         except Exception:  # noqa: BLE001
             pass
 
-        # ── 2. Technical indicators from ml_ready.stock_price_features (if exists) ─
+        # 2. Technical indicators from ml_ready.stock_price_features when present.
         try:
             feat_tbl = self.table_config.table_ref("ml_ready.stock_price_features")
             features = spark.table(feat_tbl)
+            if as_of_date:
+                features = features.where(F.to_date(F.col("Datetime")) <= F.lit(str(as_of_date)))
             feat_cols = [c for c in ("r1", "r3", "r5", "RSI14", "RVOL20", "ATR14") if c in features.columns]
             if feat_cols:
                 w_f = Window.partitionBy("Symbol").orderBy(F.col("Datetime").desc())

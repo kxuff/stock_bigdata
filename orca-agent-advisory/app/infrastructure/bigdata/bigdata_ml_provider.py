@@ -11,14 +11,18 @@ from app.application.mappers.bigdata_ml_mapper import (
     row_sort_key,
 )
 from app.schemas.enums import ToolStatus
+from app.schemas.enums import DecisionMode
 from app.schemas.enums import RiskLabel, SentimentLabel, ValuationLabel
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import (
     Freshness,
+    HoldingSnapshot,
     MarketFeature,
     MarketFeatureToolResult,
     MlPrediction,
     MlPredictionToolResult,
+    PortfolioSnapshot,
+    PortfolioToolResult,
     RiskSnapshot,
     RiskToolResult,
     SentimentSnapshot,
@@ -192,6 +196,12 @@ class BigdataMlToolResultProvider:
                 source_refs=valuation_refs,
                 error_message=error_message,
                 data=valuation_data,
+            )
+        if request.decision_mode == DecisionMode.PORTFOLIO_RECOMMENDATION:
+            bundle_kwargs["portfolio_snapshot"] = _portfolio_tool_result_from_request(
+                request,
+                as_of_timestamp=as_of_timestamp,
+                freshness=freshness,
             )
 
         return ToolResultBundle(**bundle_kwargs)
@@ -403,6 +413,86 @@ def _valuation_snapshot_from_row(row: Mapping[str, Any]) -> ValuationSnapshot | 
         valuation_fetched_at=_datetime_or_none(row.get("valuation_fetched_at") or row.get("fetched_at")),
         fundamentals_as_of=_datetime_or_none(row.get("fundamentals_as_of")),
         sector_sample_count=_int_or_none(row.get("sector_sample_count")),
+    )
+
+
+def _portfolio_tool_result_from_request(
+    request: AdvisoryDecisionRequest,
+    *,
+    as_of_timestamp: datetime,
+    freshness: Freshness,
+) -> PortfolioToolResult:
+    snapshot, error_message = _portfolio_snapshot_from_metadata(request.metadata)
+    status = ToolStatus.SUCCESS if snapshot is not None else ToolStatus.UNAVAILABLE
+    return PortfolioToolResult(
+        tool="PortfolioTool",
+        status=status,
+        request_id=request.request_id,
+        as_of_timestamp=as_of_timestamp,
+        freshness=freshness,
+        source_refs=["request.metadata.holdings"] if snapshot is not None else [],
+        error_message=error_message,
+        data=snapshot,
+    )
+
+
+def _portfolio_snapshot_from_metadata(metadata: Mapping[str, Any]) -> tuple[PortfolioSnapshot | None, str | None]:
+    raw = metadata.get("holdings") or metadata.get("portfolio")
+    if isinstance(raw, Mapping):
+        raw = raw.get("holdings") or raw.get("positions") or raw.get("assets")
+    if not isinstance(raw, list):
+        return None, "portfolio_snapshot is required: holdings metadata missing"
+
+    holdings: list[HoldingSnapshot] = []
+    cash_weight = 0.0
+    invalid_items: list[str] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            invalid_items.append(str(item))
+            continue
+        symbol = str(item.get("symbol") or item.get("ticker") or "").strip().upper().replace(".", "-")
+        weight = _float_or_none(
+            item.get("weight_pct")
+            if item.get("weight_pct") is not None
+            else item.get("weight")
+            if item.get("weight") is not None
+            else item.get("current_weight")
+        )
+        if not symbol or weight is None:
+            invalid_items.append(str(item))
+            continue
+        if weight < 0 or weight > 100:
+            invalid_items.append(str(item))
+            continue
+        if symbol == "CASH":
+            cash_weight += weight
+            continue
+        holdings.append(
+            HoldingSnapshot(
+                symbol=symbol,
+                weight_pct=round(weight, 4),
+                market_value=_positive_float_or_none(item.get("market_value")),
+            )
+        )
+
+    if not holdings:
+        return None, "portfolio_snapshot is required: no valid non-cash holdings metadata"
+    if cash_weight > 100:
+        return None, "portfolio_snapshot is required: cash weight exceeds 100"
+    constraints = {
+        key: metadata[key]
+        for key in ("min_cash_weight", "max_single_asset_weight", "excluded_symbols", "target_sectors")
+        if key in metadata
+    }
+    if invalid_items:
+        constraints["ignored_invalid_holdings"] = len(invalid_items)
+    return (
+        PortfolioSnapshot(
+            holdings=holdings,
+            cash_weight_pct=round(cash_weight, 4),
+            constraints=constraints,
+        ),
+        None,
     )
 
 

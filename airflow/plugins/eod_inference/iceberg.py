@@ -300,19 +300,8 @@ def merge_pandas_to_iceberg(
     config = PipelineConfig.from_env()
     try:
         df = spark.read.parquet(staging_path)
-        
-        if table_name == config.ml_ready_prediction_table:
-            df.write.format("jdbc") \
-                .options(**POSTGRES_OPTIONS) \
-                .option("dbtable", "stock_inference") \
-                .mode("append") \
-                .save()
-        elif table_name == config.curated_price_table:
-            df.write.format("jdbc") \
-                .options(**POSTGRES_OPTIONS) \
-                .option("db_table", "stock_eod") \
-                .mode("append") \
-                .save()
+
+        _write_postgres_side_sink(df, table_name, config)
                 
         if "feature_vector" in spark_table(spark, table_name).columns and "feature_vector" not in df.columns:
             df = df.withColumn("feature_vector", array(*[col(name).cast("double") for name in PRICE_FEATURE_COLUMNS]))
@@ -321,16 +310,34 @@ def merge_pandas_to_iceberg(
         delete_spark_path(spark, staging_path)
 
 
+def _write_postgres_side_sink(df, table_name: str, config: PipelineConfig) -> None:
+    dbtable = None
+    if table_name == config.ml_ready_prediction_table:
+        dbtable = "stock_inference"
+    elif table_name == config.curated_price_table:
+        dbtable = "stock_eod"
+
+    if dbtable is None:
+        return
+
+    try:
+        df.write.format("jdbc") \
+            .options(**POSTGRES_OPTIONS) \
+            .option("dbtable", dbtable) \
+            .mode("append") \
+            .save()
+    except Exception as exc:  # noqa: BLE001 - Postgres side sink must not block Iceberg.
+        logger.warning("postgres side-write skipped for %s -> %s: %s", table_name, dbtable, exc)
+
+
 def write_pandas_parquet(updates: pd.DataFrame, table_name: str) -> str:
     staging_path = _staging_path(table_name)
     updates.to_parquet(
         _s3a_to_s3_uri(staging_path),
         index=False,
-        # --- THÊM 3 DÒNG DƯỚI ĐÂY ---
         engine="pyarrow",
         coerce_timestamps="us",
         allow_truncated_timestamps=True,
-        # -----------------------------
         storage_options=_pandas_s3_storage_options(),
     )
     return staging_path

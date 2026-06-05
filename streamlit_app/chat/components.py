@@ -169,6 +169,9 @@ def render_agent_response(response: dict) -> None:
     if result_type == "single_symbol_decision":
         render_decision(result)
         return
+    if result_type == "portfolio_decision":
+        render_portfolio_decision(result)
+        return
 
     _STRUCTURED = {
         "symbol_comparison", "universe_screen", "watchlist_review",
@@ -305,6 +308,83 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
 
 
 # ── Empty state ───────────────────────────────────────────────────────────────
+
+def render_portfolio_decision(decision: dict) -> None:
+    conf = decision.get("confidence")
+    st.markdown(
+        f"""
+<div class="orca-card hold">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
+    <div style="font-size:1.25rem;font-weight:800;color:#e2e8f0;">Portfolio Recommendation</div>
+    <span class="conf-pill {_conf_cls(conf)}">{_conf_fmt(conf)} confidence</span>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    if decision.get("requires_human_review"):
+        reasons = ", ".join(decision.get("review_reasons") or [])
+        st.warning(f"Human review required before any action. {reasons}")
+
+    allocations = decision.get("portfolio_allocation") or []
+    if allocations:
+        st.dataframe(
+            [
+                {
+                    "Symbol": item.get("symbol"),
+                    "Weight %": item.get("weight_pct"),
+                    "Action": item.get("portfolio_action"),
+                    "Rationale": item.get("rationale"),
+                }
+                for item in allocations
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        cash_weight = sum(
+            float(item.get("weight_pct") or 0.0)
+            for item in allocations
+            if str(item.get("symbol", "")).upper() == "CASH"
+        )
+        st.metric("Cash weight", f"{cash_weight:.2f}%")
+
+    summary = decision.get("portfolio_summary") or {}
+    if summary:
+        cols = st.columns(2)
+        cols[0].metric("Expected risk", summary.get("expected_risk_label", "n/a"))
+        cols[1].metric("Concentration risk", summary.get("concentration_risk", "n/a"))
+        themes = summary.get("dominant_themes") or []
+        if themes:
+            st.caption("Themes: " + ", ".join(str(theme) for theme in themes))
+
+    trace = decision.get("reasoning_trace") or []
+    if trace:
+        with st.expander("Reasoning trace", expanded=False):
+            for item in trace:
+                st.markdown(f"- {item}")
+
+    validation = decision.get("validation_result") or {}
+    if validation:
+        with st.expander("Validation", expanded=False):
+            if validation.get("passed"):
+                st.success("Financial validation passed.")
+            else:
+                st.error("Financial validation failed.")
+            for violation in validation.get("violations") or []:
+                st.code(str(violation), language="text")
+
+    citations = decision.get("data_citations") or []
+    if citations:
+        with st.expander("Citations", expanded=False):
+            for citation in citations[:30]:
+                st.code(str(citation), language="text")
+
+    tool_audit = decision.get("retrieved_tool_audit") or {}
+    tool_calls = tool_audit.get("tool_calls") or []
+    if tool_calls:
+        with st.expander("Tool audit", expanded=False):
+            st.dataframe(tool_calls, use_container_width=True, hide_index=True)
+
 
 def render_empty(label: str = "No data returned.") -> None:
     st.markdown(f"""

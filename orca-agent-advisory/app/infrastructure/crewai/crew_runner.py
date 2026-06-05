@@ -27,11 +27,12 @@ from app.validators.manager_synthesis_parser import parse_manager_synthesis_outp
 from app.validators.output_repair import parse_model_output
 
 try:
-    from crewai import Crew, Process
+    from crewai import Crew, Process, Task
     from crewai.tools import BaseTool
 except ModuleNotFoundError:
     Crew = None
     Process = None
+    Task = None
     BaseTool = object
 
 
@@ -103,11 +104,65 @@ class HierarchicalCrewRunner:
 
         manager_task = artifacts.tasks[-1] if artifacts.tasks else None
         manager_payload = _extract_task_payload(manager_task) or raw_result
-        agent_outputs = _parse_specialist_outputs(artifacts.tasks, request, tool_results)
+        agent_outputs = _parse_specialist_outputs(
+            artifacts.tasks,
+            request,
+            tool_results,
+            allow_fallback=self.settings.advisory_specialist_parse_fallback,
+        )
         return CrewOrchestratedOutputs(
             agent_outputs=agent_outputs,
             manager_payload=manager_payload,
         )
+
+    def revise_manager_synthesis(
+        self,
+        request: AdvisoryDecisionRequest,
+        tool_results: ToolResultBundle,
+        agent_outputs: AgentOutputBundle,
+        previous_synthesis: ManagerSynthesisOutput,
+        violations: list[str],
+        attempt: int,
+    ) -> Any:
+        _require_crewai()
+        llm = self.llm_factory(self.settings)
+        manager_agent = create_manager_agent(
+            llm=llm,
+            verbose=self.verbose,
+            max_iter=6,
+            max_execution_time=self.settings.agent_timeout_seconds,
+        )
+        task = Task(
+            description=_revision_description(
+                request=request,
+                agent_outputs=agent_outputs,
+                previous_synthesis=previous_synthesis,
+                violations=violations,
+                attempt=attempt,
+            ),
+            expected_output=(
+                "A corrected ManagerSynthesisOutput JSON object only, with no markdown fences. "
+                "It must satisfy the same enum and portfolio allocation constraints as the original manager task."
+            ),
+            agent=manager_agent,
+        )
+        crew = Crew(
+            agents=[manager_agent],
+            tasks=[task],
+            process=Process.sequential,
+            verbose=self.verbose,
+            tracing=self.settings.crewai_tracing,
+            share_crew=self.settings.crewai_share_crew,
+        )
+        raw_result = crew.kickoff(
+            inputs={
+                "request": request.model_dump(mode="json"),
+                "request_json": request.model_dump_json(),
+                "symbols": ", ".join(request.symbols),
+                "decision_mode": request.decision_mode.value,
+            }
+        )
+        return _extract_task_payload(task) or raw_result
 
     def build_crew(
         self,
@@ -225,7 +280,7 @@ def _build_manager_task(
 
 
 def _require_crewai() -> None:
-    if Crew is None or Process is None:
+    if Crew is None or Process is None or Task is None:
         raise RuntimeError("CrewAI is required for the hierarchical crew runner")
 
 
@@ -244,6 +299,8 @@ def _parse_specialist_outputs(
     tasks: list[Any],
     request: AdvisoryDecisionRequest,
     tool_results: ToolResultBundle,
+    *,
+    allow_fallback: bool,
 ) -> AgentOutputBundle:
     market_task = tasks[0] if len(tasks) > 0 else None
     sentiment_task = tasks[1] if len(tasks) > 1 else None
@@ -253,21 +310,29 @@ def _parse_specialist_outputs(
     market_output = _parse_specialist_payload(
         _extract_task_payload(market_task),
         MarketDataAgentOutput,
+        agent_name="market_data_agent",
+        allow_fallback=allow_fallback,
         fallback=lambda: analyze_market_data(request, tool_results),
     )
     sentiment_output = _parse_specialist_payload(
         _extract_task_payload(sentiment_task),
         SentimentAgentOutput,
+        agent_name="sentiment_agent",
+        allow_fallback=allow_fallback,
         fallback=lambda: analyze_sentiment(request, tool_results),
     )
     valuation_output = _parse_specialist_payload(
         _extract_task_payload(valuation_task),
         ValuationAgentOutput,
+        agent_name="valuation_agent",
+        allow_fallback=allow_fallback,
         fallback=lambda: analyze_valuation(request, tool_results),
     )
     risk_output = _parse_specialist_payload(
         _extract_task_payload(risk_task),
         RiskAgentOutput,
+        agent_name="risk_agent",
+        allow_fallback=allow_fallback,
         fallback=lambda: analyze_risk(request, tool_results),
     )
 
@@ -283,10 +348,14 @@ def _parse_specialist_payload(
     payload: Any | None,
     model_type: type[MarketDataAgentOutput | SentimentAgentOutput | ValuationAgentOutput | RiskAgentOutput],
     *,
+    agent_name: str,
+    allow_fallback: bool,
     fallback: Callable[[], Any],
 ) -> Any:
     if payload is None:
-        return fallback()
+        if allow_fallback:
+            return fallback()
+        raise ValueError(f"specialist_output_invalid:{agent_name}:missing_payload")
 
     pydantic_output = getattr(payload, "pydantic", None)
     if isinstance(pydantic_output, model_type):
@@ -298,5 +367,32 @@ def _parse_specialist_payload(
         if isinstance(payload, dict):
             return model_type.model_validate(payload)
         return parse_model_output(payload, model_type)
-    except Exception:
+    except Exception as exc:
+        if not allow_fallback:
+            raise ValueError(f"specialist_output_invalid:{agent_name}") from exc
         return fallback()
+
+
+def _revision_description(
+    *,
+    request: AdvisoryDecisionRequest,
+    agent_outputs: AgentOutputBundle,
+    previous_synthesis: ManagerSynthesisOutput,
+    violations: list[str],
+    attempt: int,
+) -> str:
+    payload = {
+        "attempt": attempt,
+        "request": request.model_dump(mode="json"),
+        "specialist_outputs": agent_outputs.model_dump(mode="json"),
+        "previous_manager_synthesis": previous_synthesis.model_dump(mode="json"),
+        "validator_violations": violations,
+    }
+    return (
+        "Revise the previous manager synthesis to satisfy deterministic validation. "
+        "Do not call tools, fetch new data, invent metrics, or change specialist evidence. "
+        "Fix only the fields needed to resolve validator_violations while preserving source citations. "
+        "For portfolio mode, allocation weights must total 100 and obey max_single_asset_weight; use CASH only when allowed. "
+        "Return valid ManagerSynthesisOutput JSON only.\n\n"
+        f"Revision payload:\n{json.dumps(payload, default=str, sort_keys=True)}"
+    )

@@ -18,5 +18,6 @@ class DecisionOutputStore(Protocol):
         tool_results: ToolResultBundle,
         manager_synthesis: ManagerSynthesisOutput,
         decision: DecisionResult,
+        revision_attempts: list[dict] | None = None,
     ) -> Path:
         """Persist decision payload and return path."""

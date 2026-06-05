@@ -1,71 +1,124 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 
+from chat import state as chat_state
+from services.advisory_api import create_agent_query_job, fetch_advisory_pick_detail, fetch_data_coverage
 from services.backtest_api import DEFAULT_SYMBOLS, build_equity_figure, run_strategy_backtest
-from services.ml_inference_api import (
-    MAX_RISK_PROB_PCT,
-    MIN_PRED_A,
-    ensure_latest_ml_inference,
-    normalize_ml_inference_picks,
+from services.demo_diagnostics import (
+    classify_issue,
+    coverage_by_symbol,
+    coverage_warning as describe_coverage_warning,
+    issue_summary,
+    normalize_symbol,
 )
+from services.ml_inference_api import MAX_RISK_PROB_PCT, MIN_PRED_A, fetch_ml_inference_picks_result
 
 
-st.set_page_config(page_title="AI Stock Picks", page_icon="⭐", layout="wide")
+st.set_page_config(page_title="AI Stock Picks", page_icon="*", layout="wide")
+chat_state.init()
 BACKTEST_CACHE_VERSION = "cr_metric_v2"
 
-st.markdown("""
-<style>
-.pick-card{background:#111827;border:1px solid #374151;border-radius:8px;padding:16px;margin-bottom:10px}
-.badge{display:inline-block;padding:3px 8px;border-radius:6px;font-weight:800;font-size:12px}
-.buy{background:#064e3b;color:#6ee7b7}.watch{background:#78350f;color:#fcd34d}.risk{background:#7f1d1d;color:#fecaca}
-.muted{color:#9ca3af}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("⭐ AI Stock Picks")
-st.caption("Ranked model signals from the latest EOD inference batch.")
+st.title("AI Stock Picks")
+st.caption("Ranked ORCA model signals from the latest EOD inference batch.")
 
 with st.expander("Output contract"):
     st.markdown(
         f"""
-        - `Date`: ngày phát sinh tín hiệu mua.
-        - `Ticker`: mã cổ phiếu.
-        - `Entry_Price`: giá mua đề xuất tại thời điểm tín hiệu.
-        - `Pred_A`: mức tăng giá dự báo bởi mô hình, dạng thập phân.
-        - `Risk_Prob_%`: chỉ số rủi ro dự báo của mô hình, hiển thị theo phần trăm.
-        - `FinalScore`: điểm xếp hạng cuối cùng, tương đương `Pred_A * (1 - RiskProb)`.
-        - Chỉ hiển thị mã có `Pred_A >= {MIN_PRED_A:.2f}` và `Risk_Prob <= {MAX_RISK_PROB_PCT / 100:.2f}`.
+        - `Date`: signal date.
+        - `Ticker`: stock symbol.
+        - `Entry_Price`: proposed entry/reference price.
+        - `Pred_A`: model upside signal as a decimal.
+        - `Risk_Prob_%`: model risk probability as a percent.
+        - `FinalScore`: `Pred_A * (1 - RiskProb)`.
+        - `Ready`: required market, ML, and risk context is complete for demo use.
+        - The page filters to `Pred_A >= {MIN_PRED_A:.2f}` and `Risk_Prob <= {MAX_RISK_PROB_PCT / 100:.2f}`.
         """
     )
 
-with st.spinner("Checking latest EOD signal batch..."):
-    try:
-        availability = ensure_latest_ml_inference()
-        if availability.prediction_path is None:
-            picks = None
-        else:
-            picks = normalize_ml_inference_picks(pd.read_parquet(availability.prediction_path), limit=100)
-    except Exception as exc:
-        availability = None
-        st.warning(f"Cannot load ML inference output: {exc}")
-        picks = None
+try:
+    picks_result = fetch_ml_inference_picks_result(limit=100)
+    picks = picks_result.frame
+    picks_warnings = list(picks_result.warnings)
+    picks_source = picks_result.source
+    picks_error = picks_result.error
+except Exception as exc:  # noqa: BLE001 - UI should stay usable when backend/local data is absent.
+    picks_warnings = [str(exc)]
+    picks_source = "error"
+    picks_error = str(exc)
+    st.warning(f"Cannot load ML inference output: {classify_issue(str(exc))}: {exc}")
+    picks = None
 
-if availability is not None:
-    status = f"Expected latest signal date: `{availability.expected_signal_date.isoformat()}`."
-    if availability.prediction_path is not None:
-        status += f" Reading `{availability.prediction_path}`."
-    if availability.refreshed:
-        st.success(status + " Refreshed automatically.")
-    elif availability.refresh_error:
-        st.warning(status + f" Auto-refresh failed: {availability.refresh_error}")
-    else:
-        st.caption(status)
+
+def _create_pick_job(symbol: str) -> None:
+    payload = {
+        "message": f"Should I buy {symbol} today?",
+        "context": {
+            "symbol": symbol,
+            "investment_horizon": "SHORT_TERM",
+            "risk_tolerance": "MODERATE",
+        },
+    }
+    try:
+        job = create_agent_query_job(payload, timeout=30.0)
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not create ORCA job: {exc}")
+        return
+    chat_state.add_job(
+        {
+            "job_id": job.get("job_id"),
+            "kind": "agent_query",
+            "symbol": symbol,
+            "prompt": payload["message"],
+            "created_at": chat_state.utc_now().isoformat(),
+            "updated_at": None,
+            "status": job.get("status", "queued"),
+            "result_fetched": False,
+            "events_complete": False,
+        }
+    )
+    st.success(f"ORCA job created: {job.get('job_id', 'unknown')}")
+    st.page_link("pages/2_AI_Chat.py", label="Open AI Chat")
+
+
+def _ready_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "ready"}
+
+
+def _load_coverage(symbols: list[str]) -> tuple[dict[str, dict[str, Any]], str | None]:
+    if not symbols:
+        return {}, None
+    try:
+        payload = fetch_data_coverage(symbols, timeout=20.0)
+    except Exception as exc:  # noqa: BLE001
+        return {}, str(exc)
+    return coverage_by_symbol(payload), None
+
+
+def _render_pick_diagnostic(warnings: list[str], error: str | None = None) -> None:
+    messages = [*warnings]
+    if error and error not in messages:
+        messages.insert(0, error)
+    issue = issue_summary(messages or ["No prediction rows matched the requested filters."])
+    st.warning(f"{issue}: no qualified ML picks are available for the current filters.")
+    if messages:
+        with st.expander("Diagnostics", expanded=True):
+            for message in messages:
+                st.code(str(message), language="text")
+
 
 if picks is not None and not picks.empty:
+    st.caption(f"Source: {picks_source}")
+    if picks_warnings:
+        st.warning(issue_summary(picks_warnings))
     dates = sorted(picks["Date"].dropna().unique(), reverse=True)
     tickers = sorted(picks["Ticker"].dropna().unique())
     col1, col2, col3, col4 = st.columns(4)
@@ -81,43 +134,72 @@ if picks is not None and not picks.empty:
         & (picks["Risk_Prob_%"].fillna(0) <= max_risk)
     ].sort_values("FinalScore", ascending=False)
 
-    top = filtered_picks.head(3)
-    metrics = st.columns(3)
-    metrics[0].metric("Signals", len(filtered_picks))
-    metrics[1].metric("Best FinalScore", f"{filtered_picks['FinalScore'].max():.4f}" if not filtered_picks.empty else "n/a")
-    metrics[2].metric("Average Pred_A", f"{filtered_picks['Pred_A'].mean() * 100:.2f}%" if not filtered_picks.empty else "n/a")
+    visible_symbols = sorted({normalize_symbol(symbol) for symbol in filtered_picks["Ticker"].dropna().astype(str).tolist()})
+    coverage_map, coverage_error = _load_coverage(visible_symbols[:25])
+    if coverage_error:
+        st.warning(f"Coverage check failed: {classify_issue(coverage_error)}: {coverage_error}")
 
-    for _, pick in top.iterrows():
-        badge_class = "buy" if pick["Pred_A"] > 0 and pick["FinalScore"] > 0 else "watch"
-        st.markdown(
-            f"""
-            <div class='pick-card'>
-              <span class='badge {badge_class}'>MODEL PICK</span>
-              <h3>{pick['Ticker']}</h3>
-              <p>
-                <b>Entry:</b> ${pick['Entry_Price']:.2f} ·
-                <b>Pred_A:</b> {pick['Pred_A'] * 100:.2f}% ·
-                <b>Risk:</b> {pick['Risk_Prob_%']:.2f}% ·
-                <b>FinalScore:</b> {pick['FinalScore']:.4f}
-              </p>
-              <p class='muted'>Signal date: {pick['Date']}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    ready_count = int(filtered_picks["Ready"].map(_ready_value).sum()) if "Ready" in filtered_picks.columns else len(filtered_picks)
+    metrics = st.columns(4)
+    metrics[0].metric("Signals", len(filtered_picks))
+    metrics[1].metric("Ready", ready_count)
+    metrics[2].metric("Best FinalScore", f"{filtered_picks['FinalScore'].max():.4f}" if not filtered_picks.empty else "n/a")
+    metrics[3].metric("Average Pred_A", f"{filtered_picks['Pred_A'].mean() * 100:.2f}%" if not filtered_picks.empty else "n/a")
+
+    st.subheader("Top Picks")
+    for _, pick in filtered_picks.head(3).iterrows():
+        symbol = normalize_symbol(str(pick["Ticker"]))
+        coverage_row = coverage_map.get(symbol)
+        ready = bool(coverage_row.get("ready")) if coverage_row else _ready_value(pick.get("Ready", True))
+        warnings = describe_coverage_warning(coverage_row) if coverage_row else str(pick.get("Warnings") or "")
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 0.8], vertical_alignment="center")
+            c1.metric(symbol, f"${pick['Entry_Price']:,.2f}", f"FinalScore {pick['FinalScore']:.4f}")
+            c2.metric("Pred_A", f"{pick['Pred_A'] * 100:.2f}%")
+            c3.metric("Risk", f"{pick['Risk_Prob_%']:.2f}%")
+            if c4.button("Ask ORCA", key=f"pick-job-{symbol}", disabled=not ready, use_container_width=True):
+                _create_pick_job(symbol)
+            if warnings:
+                st.warning(warnings)
+
+    st.subheader("Pick Detail")
+    if visible_symbols:
+        detail_symbol = st.selectbox("Detail symbol", visible_symbols, index=0)
+        try:
+            detail = fetch_advisory_pick_detail(detail_symbol, timeout=20.0)
+        except Exception as exc:  # noqa: BLE001
+            st.warning(f"Pick detail unavailable for {detail_symbol}: {classify_issue(str(exc))}: {exc}")
+        else:
+            detail_cols = st.columns(5)
+            detail_cols[0].metric("Symbol", detail.get("symbol", detail_symbol))
+            detail_cols[1].metric("Pred_A", f"{float(detail.get('pred_a') or 0) * 100:.2f}%")
+            detail_cols[2].metric("Risk", f"{float(detail.get('risk_prob') or 0) * 100:.2f}%")
+            detail_cols[3].metric("FinalScore", f"{float(detail.get('final_score') or 0):.4f}")
+            detail_cols[4].metric("Ready", "Yes" if detail.get("ready") else "No")
+            warnings = detail.get("warnings") or []
+            if warnings:
+                st.warning("; ".join(str(item) for item in warnings))
+            with st.expander("Raw pick detail"):
+                st.json(detail)
+    else:
+        st.info("No filtered picks available for detail.")
 
     st.subheader("Ranking Table")
     display = filtered_picks.copy()
+    if coverage_map:
+        display["Coverage"] = display["Ticker"].map(
+            lambda value: "Ready" if (coverage_map.get(normalize_symbol(str(value))) or {}).get("ready") else "Not ready"
+        )
+        display["Coverage Warnings"] = display["Ticker"].map(
+            lambda value: describe_coverage_warning(coverage_map.get(normalize_symbol(str(value))))
+        )
     display["Entry_Price"] = display["Entry_Price"].map(lambda value: f"${value:,.2f}")
     display["Pred_A"] = display["Pred_A"].map(lambda value: f"{value * 100:.2f}%")
     display["Risk_Prob_%"] = display["Risk_Prob_%"].map(lambda value: f"{value:.2f}%")
     display["FinalScore"] = display["FinalScore"].map(lambda value: f"{value:.4f}")
-    st.dataframe(display, width="stretch", hide_index=True)
+    st.dataframe(display, use_container_width=True, hide_index=True)
 else:
-    st.info(
-        "No qualified ML picks found. The page only shows signals with "
-        f"Pred_A >= {MIN_PRED_A * 100:.0f}% and Risk_Prob <= {MAX_RISK_PROB_PCT:.0f}%."
-    )
+    _render_pick_diagnostic(picks_warnings, picks_error)
 
 
 @st.cache_data(show_spinner=False)
@@ -178,7 +260,7 @@ if run_backtest:
                 horizon_days=int(horizon_days),
                 cache_version=BACKTEST_CACHE_VERSION,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             st.error(f"Backtest failed: {exc}")
             result = None
 
@@ -213,7 +295,7 @@ if run_backtest:
             st.bar_chart(result.exit_reason_counts)
 
         st.subheader("Executed Trades")
-        st.dataframe(result.trades, width="stretch", hide_index=True)
+        st.dataframe(result.trades, use_container_width=True, hide_index=True)
         st.download_button(
             "Download Trades CSV",
             data=result.trades.to_csv(index=False).encode("utf-8"),

@@ -7,10 +7,15 @@ from services.advisory_api import (
     create_agent_query_job,
     fetch_health,
     fetch_status,
+    get_agent_query_job_result,
+    get_decision_job_result,
     stream_agent_query_job_events,
     stream_decision_job_events,
 )
 from chat import state
+
+
+DEFAULT_PORTFOLIO_HOLDINGS = "AAPL:35, MSFT:35, NVDA:20, CASH:10"
 
 
 # ── Horizon / risk maps ───────────────────────────────────────────────────────
@@ -26,6 +31,50 @@ def horizon_value(label: str) -> str:
         "1-3 months": "MEDIUM_TERM",
         "6-12 months": "LONG_TERM",
     }.get(label, "SHORT_TERM")
+
+
+def parse_holdings_text(value: str) -> tuple[list[dict], list[str]]:
+    holdings: list[dict] = []
+    warnings: list[str] = []
+    for raw_part in (value or "").split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            warnings.append(f"Invalid holding '{part}'. Use SYMBOL:weight.")
+            continue
+        raw_symbol, raw_weight = part.split(":", 1)
+        symbol = raw_symbol.strip().upper().replace(".", "-")
+        try:
+            weight = float(raw_weight.strip())
+        except ValueError:
+            warnings.append(f"Invalid weight for {symbol or 'holding'}.")
+            continue
+        if not symbol:
+            warnings.append("Holding symbol is blank.")
+            continue
+        if weight < 0 or weight > 100:
+            warnings.append(f"Weight for {symbol} must be between 0 and 100.")
+            continue
+        holdings.append({"symbol": symbol, "weight": weight})
+    return holdings, warnings
+
+
+def build_portfolio_metadata(
+    holdings_text: str,
+    *,
+    min_cash_weight: float | None = None,
+    max_single_asset_weight: float | None = None,
+) -> tuple[dict, list[str]]:
+    holdings, warnings = parse_holdings_text(holdings_text)
+    metadata: dict = {}
+    if holdings:
+        metadata["holdings"] = holdings
+    if min_cash_weight is not None:
+        metadata["min_cash_weight"] = float(min_cash_weight)
+    if max_single_asset_weight is not None:
+        metadata["max_single_asset_weight"] = float(max_single_asset_weight)
+    return metadata, warnings
 
 
 # ── Error formatting ──────────────────────────────────────────────────────────
@@ -80,17 +129,20 @@ def check_backend() -> dict:
 
 # ── Submit ────────────────────────────────────────────────────────────────────
 
-def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
+def submit(prompt: str, symbol: str, horizon: str, risk: str, portfolio_metadata: dict | None = None) -> str | None:
     """Create /api/v1/agent/query-jobs async job, update session state, return error string or None."""
     try:
         fetch_health()
+        context = {
+            "symbol": symbol or None,
+            "investment_horizon": horizon_value(horizon),
+            "risk_tolerance": risk_value(risk),
+        }
+        if portfolio_metadata:
+            context["metadata"] = portfolio_metadata
         job = create_agent_query_job({
             "message": prompt,
-            "context": {
-                "symbol": symbol or None,
-                "investment_horizon": horizon_value(horizon),
-                "risk_tolerance": risk_value(risk),
-            },
+            "context": context,
         })
         if not isinstance(job, dict) or not job.get("job_id"):
             return _error_md("malformed_response", "ORCA returned no job_id.", repr(job))
@@ -105,6 +157,7 @@ def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
             "status":         job.get("status", "queued"),
             "result_fetched": False,
             "events_complete": False,
+            "portfolio_metadata": portfolio_metadata or {},
         })
         return None
     except Exception as exc:  # noqa: BLE001
@@ -151,9 +204,72 @@ def stream_events(job: dict) -> None:
                 break
         state.sync_jobs_to_query()
     except Exception as exc:  # noqa: BLE001
+        poll_status = poll_job_result(job)
+        if poll_status not in {"completed", "failed"}:
+            job["events_complete"] = True
+            job["error_message"] = _safe_error(exc)
+            st.warning(f"Live job stream unavailable. Polling fallback is active: {_safe_error(exc)}")
+        state.sync_jobs_to_query()
+
+
+def poll_job_result(job: dict) -> str:
+    """Poll a job result endpoint once and update local job state."""
+    job_id = job.get("job_id")
+    if not job_id:
         job["status"] = "failed"
+        job["error_message"] = "Missing job_id."
+        return "failed"
+    try:
+        getter = get_agent_query_job_result if job.get("kind") == "agent_query" else get_decision_job_result
+        status_code, payload = getter(job_id, timeout=10.0)
+    except Exception as exc:  # noqa: BLE001
         job["error_message"] = _safe_error(exc)
-        st.error(_safe_error(exc))
+        return "error"
+    return apply_job_result(job, status_code, payload)
+
+
+def apply_job_result(job: dict, status_code: int, payload: dict) -> str:
+    if status_code == 202:
+        job.update(
+            {
+                "status": payload.get("status", job.get("status", "running")),
+                "progress_stage": payload.get("progress_stage"),
+                "progress_pct": payload.get("progress"),
+                "updated_at": payload.get("updated_at") or state.utc_now().isoformat(),
+            }
+        )
+        if state.is_stale(job):
+            job["status"] = "stale"
+            state.sync_jobs_to_query()
+            return "failed"
+        state.sync_jobs_to_query()
+        return "pending"
+    if status_code == 200:
+        if job.get("kind") == "agent_query":
+            _add_agent_query_result(job["job_id"], payload)
+        else:
+            state.add_decision_once(f"{job['job_id']}:result", payload)
+        job.update(
+            {
+                "status": "completed",
+                "result_fetched": True,
+                "events_complete": True,
+                "updated_at": state.utc_now().isoformat(),
+            }
+        )
+        state.sync_jobs_to_query()
+        return "completed"
+    job.update(
+        {
+            "status": "failed",
+            "error": payload,
+            "error_message": _extract_error(payload),
+            "events_complete": True,
+            "updated_at": state.utc_now().isoformat(),
+        }
+    )
+    state.sync_jobs_to_query()
+    return "failed"
 
 
 def _add_agent_query_result(job_id: str, response: dict) -> None:
@@ -177,9 +293,9 @@ def retry_job(job: dict, horizon: str, risk: str) -> None:
     prompt = job.get("prompt")
     symbol = job.get("symbol")
     if not prompt or not symbol:
-        st.warning("Retry unavailable — prompt not persisted across reload.")
+        st.warning("Retry unavailable - prompt not persisted across reload.")
         return
     state.add_user(prompt)
-    reply = submit(prompt, symbol, horizon, risk)
+    reply = submit(prompt, symbol, horizon, risk, portfolio_metadata=job.get("portfolio_metadata") or None)
     if reply:
         state.add_assistant(reply)

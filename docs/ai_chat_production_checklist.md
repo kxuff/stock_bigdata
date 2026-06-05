@@ -4,7 +4,7 @@ File: `streamlit_app/pages/2_AI_Chat.py`
 
 Goal: make screen production-usable with small shippable milestones. Push after each milestone.
 
-## Milestone 1 — Safe basics
+## Milestone 1 - Safe basics
 
 - [x] Replace multi-symbol input with single `Symbol submitted to ORCA` input.
 - [x] Remove primary selector because ORCA chat is single-symbol only.
@@ -15,7 +15,7 @@ Goal: make screen production-usable with small shippable milestones. Push after 
 - [x] Remove disabled `Cancel` button.
 - [x] Verify: no valid symbol means no job can be submitted.
 
-## Milestone 2 — Backend health + readiness
+## Milestone 2 - Backend health + readiness
 
 - [x] Add sidebar/backend status badge: `Connected`, `Degraded`, `Offline`.
 - [x] Check `fetch_health()` and `fetch_status()` on page load or refresh button.
@@ -24,7 +24,7 @@ Goal: make screen production-usable with small shippable milestones. Push after 
 - [x] Show failed tool name, status, missing symbols, stale flag.
 - [x] Verify: ORCA offline gives clear message and no submit.
 
-## Milestone 3 — Job lifecycle
+## Milestone 3 - Job lifecycle
 
 - [x] Replace manual-only job flow with clear job cards.
 - [x] Show status: `queued`, `running`, `completed`, `failed`, `stale`.
@@ -35,7 +35,7 @@ Goal: make screen production-usable with small shippable milestones. Push after 
 - [x] Add `Remove` for failed/stale/completed jobs.
 - [x] Verify: completed job result appears without extra guessing.
 
-## Milestone 4 — No prompt leakage
+## Milestone 4 - No prompt leakage
 
 - [x] Stop storing full prompt in `st.query_params`.
 - [x] Store only `job_id`, `symbol`, `status`, `created_at`.
@@ -44,7 +44,7 @@ Goal: make screen production-usable with small shippable milestones. Push after 
 - [x] Mark stale jobs and offer remove/retry.
 - [x] Verify: browser URL contains no user prompt.
 
-## Milestone 5 — Decision result cards
+## Milestone 5 - Decision result cards
 
 - [x] Replace plain markdown result with structured sections.
 - [x] Header card: symbol, recommendation badge, confidence.
@@ -56,7 +56,7 @@ Goal: make screen production-usable with small shippable milestones. Push after 
 - [x] Put citations/audit in expanders.
 - [x] Verify: recommendation, risk, human review visible in <5 seconds.
 
-## Milestone 6 — Error handling
+## Milestone 6 - Error handling
 
 - [x] Classify errors: API offline, readiness fail, job fail, timeout, malformed response.
 - [x] Show friendly message plus technical detail in expander.
@@ -64,7 +64,7 @@ Goal: make screen production-usable with small shippable milestones. Push after 
 - [x] Validate API response shape before indexing `job["job_id"]`.
 - [x] Verify: malformed API response does not crash page.
 
-## Milestone 7 — UX polish
+## Milestone 7 - UX polish
 
 - [x] Add conversation empty state.
 - [x] Add `Clear chat` button.
@@ -74,7 +74,7 @@ Goal: make screen production-usable with small shippable milestones. Push after 
 - [x] Replace broad `Production mode` text with live status text.
 - [x] Verify: page works on laptop/tablet width.
 
-## Milestone 8 — Security + maintainability
+## Milestone 8 - Security + maintainability
 
 - [x] Escape all dynamic HTML values.
 - [x] Never render user prompt with `unsafe_allow_html=True`.

@@ -18,10 +18,16 @@ from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse
 from app.schemas.tool_results import ToolResultValidationError
 from app.config import load_settings
+from app.application.ports.market_screen_provider import MarketScreenProvider
 from app.application.ports.tool_result_provider import ToolResultProvider
 from app.application.use_cases.advisory_decision_service import AdvisoryDecisionService, DecisionValidationError
 from app.application.use_cases.autonomous_agent_service import AutonomousAgentService
-from app.bootstrap.container import build_autonomous_agent_service, build_decision_service, build_tool_result_provider
+from app.bootstrap.container import (
+    build_autonomous_agent_service,
+    build_decision_service,
+    build_market_screen_provider,
+    build_tool_result_provider,
+)
 from app.infrastructure.storage.decision_job_store import (
     DecisionJobStore,
     IdempotencyConflictError,
@@ -57,6 +63,10 @@ def get_decision_service() -> AdvisoryDecisionService:
 
 def get_tool_result_provider() -> ToolResultProvider:
     return build_tool_result_provider(load_settings())
+
+
+def get_market_screen_provider() -> MarketScreenProvider:
+    return build_market_screen_provider(load_settings())
 
 
 def get_autonomous_agent_service() -> AutonomousAgentService:
@@ -214,6 +224,23 @@ def create_agent_query(
             latency_ms=_latency_ms(started),
         )
         return response
+    except ToolResultValidationError as exc:
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            http_request=http_request,
+            status="failed",
+            error_code="MISSING_REQUIRED_TOOL_RESULT",
+            latency_ms=_latency_ms(started),
+        )
+        return _error_response(
+            request_id=_agent_request_id(request) or "UNKNOWN",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="MISSING_REQUIRED_TOOL_RESULT",
+            message=str(exc),
+            recoverable=True,
+            missing_tool_results=_missing_tool_results(str(exc)),
+        )
     except Exception as exc:
         _record_agent_route_audit(
             audit_store,
@@ -523,6 +550,139 @@ def data_readiness(
     return {"ready": ready, "symbols": symbol_list, "decision_mode": decision_mode, "tools": tools}
 
 
+@app.get("/api/v1/data/coverage")
+def data_coverage(
+    symbols: str = Query(..., min_length=1),
+    decision_mode: str = Query("single_symbol_advisory"),
+    tool_result_provider: ToolResultProvider = Depends(get_tool_result_provider),
+) -> dict[str, Any]:
+    symbol_list = _query_symbols(symbols)
+    if not symbol_list:
+        return {
+            "ready": False,
+            "symbols": [],
+            "decision_mode": decision_mode,
+            "rows": [],
+            "error": "No valid symbols were provided.",
+        }
+
+    now = datetime.now(UTC)
+    request_mode = decision_mode if len(symbol_list) == 1 else "portfolio_recommendation"
+    request = AdvisoryDecisionRequest(
+        request_id=f"coverage-{uuid4()}",
+        timestamp=now,
+        as_of_timestamp=now,
+        user_query="data coverage check",
+        decision_mode=request_mode,
+        symbols=symbol_list,
+    )
+    try:
+        bundle = tool_result_provider.get_tool_results(request)
+    except Exception as exc:  # noqa: BLE001 - coverage must fail soft for UI.
+        return {
+            "ready": False,
+            "symbols": symbol_list,
+            "decision_mode": decision_mode,
+            "rows": [
+                {
+                    "symbol": symbol,
+                    "ready": False,
+                    "latest_timestamp": None,
+                    "tools": {},
+                    "warnings": [str(exc)],
+                }
+                for symbol in symbol_list
+            ],
+            "error": str(exc),
+        }
+
+    rows = [_coverage_row(bundle, symbol) for symbol in symbol_list]
+    return {
+        "ready": all(row["ready"] for row in rows),
+        "symbols": symbol_list,
+        "decision_mode": decision_mode,
+        "rows": rows,
+    }
+
+
+@app.get("/api/v1/advisory/picks")
+def advisory_picks(
+    limit: int = Query(25, ge=1, le=100),
+    min_pred_a: float = Query(0.06, ge=-1.0, le=1.0),
+    max_risk_prob: float = Query(0.3, ge=0.0, le=1.0),
+    as_of_date: str | None = Query(None),
+    market_screen_provider: MarketScreenProvider = Depends(get_market_screen_provider),
+) -> dict[str, Any]:
+    try:
+        rows = _screen_rows(market_screen_provider, max(limit * 4, limit), as_of_date)
+    except Exception as exc:  # noqa: BLE001 - UI needs structured failure.
+        return {
+            "data": [],
+            "count": 0,
+            "limit": limit,
+            "filters": {"min_pred_a": min_pred_a, "max_risk_prob": max_risk_prob, "as_of_date": as_of_date},
+            "warnings": [str(exc)],
+        }
+
+    picks = [_pick_from_row(row) for row in rows]
+    picks = [
+        pick
+        for pick in picks
+        if pick["pred_a"] is not None
+        and pick["risk_prob"] is not None
+        and pick["pred_a"] >= min_pred_a
+        and pick["risk_prob"] <= max_risk_prob
+    ]
+    picks = sorted(picks, key=lambda pick: (pick["final_score"] is not None, pick["final_score"] or -9999), reverse=True)
+    data = picks[:limit]
+    warnings = [] if data else ["No prediction rows matched the requested filters."]
+    return {
+        "data": data,
+        "count": len(data),
+        "limit": limit,
+        "filters": {"min_pred_a": min_pred_a, "max_risk_prob": max_risk_prob, "as_of_date": as_of_date},
+        "warnings": warnings,
+    }
+
+
+@app.get("/api/v1/advisory/picks/{symbol}", response_model=None)
+def advisory_pick_detail(
+    symbol: str,
+    market_screen_provider: MarketScreenProvider = Depends(get_market_screen_provider),
+) -> dict[str, Any] | JSONResponse:
+    normalized = _normalize_symbol(symbol)
+    if not normalized:
+        return _error_response(
+            request_id="picks-UNKNOWN",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code="PICK_NOT_FOUND",
+            message="pick not found",
+            recoverable=True,
+        )
+    try:
+        rows = market_screen_provider.load_symbols([normalized])
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(
+            request_id=f"picks-{normalized}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code="PICK_PROVIDER_UNAVAILABLE",
+            message=str(exc) or "pick provider unavailable",
+            recoverable=True,
+        )
+    if not rows:
+        return _error_response(
+            request_id=f"picks-{normalized}",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code="PICK_NOT_FOUND",
+            message=f"no pick found for {normalized}",
+            recoverable=True,
+        )
+    pick = _pick_from_row(rows[0])
+    if not pick["symbol"]:
+        pick["symbol"] = normalized
+    return pick
+
+
 def _error_response(
     *,
     request_id: str,
@@ -556,6 +716,210 @@ def _missing_tool_results(message: str) -> list[str]:
         "valuation_snapshot",
     ]
     return [tool for tool in known_tools if tool in message]
+
+
+def _query_symbols(symbols: str) -> list[str]:
+    normalized: list[str] = []
+    for value in symbols.split(","):
+        symbol = _normalize_symbol(value)
+        if symbol and symbol not in normalized:
+            normalized.append(symbol)
+    return normalized
+
+
+def _normalize_symbol(value: Any) -> str | None:
+    symbol = str(value or "").strip().upper().replace(".", "-")
+    return symbol or None
+
+
+def _coverage_row(bundle: Any, symbol: str) -> dict[str, Any]:
+    tool_names = [
+        "market_features",
+        "ml_predictions",
+        "risk_snapshot",
+        "sentiment_snapshot",
+        "valuation_snapshot",
+    ]
+    tools = {tool_name: _symbol_tool_coverage(getattr(bundle, tool_name, None), symbol) for tool_name in tool_names}
+    required = ["market_features", "ml_predictions", "risk_snapshot"]
+    ready = all(tools[tool]["status"] == "SUCCESS" for tool in required)
+    warnings = [
+        f"{tool} {data['status'].lower()}"
+        for tool, data in tools.items()
+        if data["status"] != "SUCCESS"
+    ]
+    latest_timestamp = _latest_timestamp(
+        data["freshness"].get("last_updated_at")
+        for data in tools.values()
+        if data.get("present") and isinstance(data.get("freshness"), dict)
+    )
+    return {
+        "symbol": symbol,
+        "ready": ready,
+        "latest_timestamp": latest_timestamp,
+        "tools": tools,
+        "warnings": warnings,
+    }
+
+
+def _symbol_tool_coverage(result: Any, symbol: str) -> dict[str, Any]:
+    if result is None:
+        return {"status": "MISSING", "present": False, "freshness": {}, "error": None}
+
+    status_value = _status_value(getattr(result, "status", None))
+    data = getattr(result, "data", None)
+    present = _symbol_present(data, symbol)
+    freshness_model = getattr(result, "freshness", None)
+    freshness = freshness_model.model_dump(mode="json") if hasattr(freshness_model, "model_dump") else {}
+
+    if present and freshness.get("is_stale"):
+        status_for_symbol = "STALE"
+    elif present and status_value in {"SUCCESS", "PARTIAL"}:
+        status_for_symbol = "SUCCESS"
+    elif present:
+        status_for_symbol = status_value
+    elif status_value in {"UNAVAILABLE", "ERROR"}:
+        status_for_symbol = status_value
+    else:
+        status_for_symbol = "MISSING"
+
+    return {
+        "status": status_for_symbol,
+        "present": present,
+        "freshness": freshness,
+        "error": getattr(result, "error_message", None),
+    }
+
+
+def _symbol_present(data: Any, symbol: str) -> bool:
+    if isinstance(data, dict):
+        return symbol in {str(key).upper() for key in data.keys()}
+    holdings = getattr(data, "holdings", None)
+    if holdings is not None:
+        return symbol in {str(getattr(holding, "symbol", "")).upper() for holding in holdings}
+    return False
+
+
+def _status_value(value: Any) -> str:
+    if value is None:
+        return "MISSING"
+    return str(getattr(value, "value", value)).upper()
+
+
+def _screen_rows(provider: MarketScreenProvider, limit: int, as_of_date: str | None) -> list[dict[str, Any]]:
+    if as_of_date:
+        try:
+            return provider.screen_latest(limit=limit, as_of_date=as_of_date)  # type: ignore[call-arg]
+        except TypeError:
+            pass
+    return provider.screen_latest(limit=limit)
+
+
+def _pick_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    symbol = _normalize_symbol(_first_present(row, "Symbol", "symbol")) or ""
+    pred_a = _float_or_none(_first_present(row, "pred_a", "Pred_A"))
+    risk_prob = _risk_prob(_first_present(row, "risk_prob", "Risk_Prob_%", "RiskProb"))
+    final_score = _float_or_none(_first_present(row, "final_score", "FinalScore"))
+    if final_score is None and pred_a is not None and risk_prob is not None:
+        final_score = pred_a * (1 - risk_prob)
+    date_value = _first_present(row, "Date", "date", "Datetime", "datetime", "as_of", "freshness")
+    latest_price = _float_or_none(_first_present(row, "latest_price", "Close", "close", "entry_price", "Entry_Price"))
+    entry_price = _float_or_none(_first_present(row, "entry_price", "Entry_Price", "Close", "close", "latest_price"))
+    warnings = _pick_warnings(
+        symbol=symbol,
+        date_value=date_value,
+        entry_price=entry_price,
+        pred_a=pred_a,
+        risk_prob=risk_prob,
+        final_score=final_score,
+    )
+    return {
+        "symbol": symbol,
+        "date": _date_string(date_value),
+        "entry_price": entry_price,
+        "pred_a": pred_a,
+        "risk_prob": risk_prob,
+        "final_score": final_score,
+        "latest_price": latest_price,
+        "ready": not warnings,
+        "warnings": warnings,
+    }
+
+
+def _pick_warnings(
+    *,
+    symbol: str,
+    date_value: Any,
+    entry_price: float | None,
+    pred_a: float | None,
+    risk_prob: float | None,
+    final_score: float | None,
+) -> list[str]:
+    warnings: list[str] = []
+    if not symbol:
+        warnings.append("missing symbol")
+    if _date_string(date_value) is None:
+        warnings.append("missing date")
+    if entry_price is None:
+        warnings.append("missing entry_price")
+    if pred_a is None:
+        warnings.append("missing pred_a")
+    if risk_prob is None:
+        warnings.append("missing risk_prob")
+    if final_score is None:
+        warnings.append("missing final_score")
+    return warnings
+
+
+def _first_present(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in row and row.get(key) is not None:
+            return row.get(key)
+    return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _risk_prob(value: Any) -> float | None:
+    parsed = _float_or_none(value)
+    if parsed is None:
+        return None
+    return parsed / 100 if parsed > 1 else parsed
+
+
+def _date_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.date().isoformat()
+    except ValueError:
+        text = str(value).strip()
+        return text[:10] if text else None
+
+
+def _latest_timestamp(values: Any) -> str | None:
+    parsed_values = [_parse_timestamp(value) for value in values if value]
+    parsed_values = [value for value in parsed_values if value is not None]
+    if not parsed_values:
+        return None
+    return max(parsed_values).isoformat()
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _run_decision_job(
@@ -647,6 +1011,26 @@ def _run_agent_query_job(
             user_id=user_id,
             response=response,
             status="succeeded",
+            latency_ms=_latency_ms(started),
+        )
+    except ToolResultValidationError as exc:
+        _fail_job(
+            job_id,
+            request_id="UNKNOWN",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="MISSING_REQUIRED_TOOL_RESULT",
+            message=str(exc),
+            recoverable=True,
+            missing_tool_results=_missing_tool_results(str(exc)),
+        )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            status="failed",
+            error_code="MISSING_REQUIRED_TOOL_RESULT",
             latency_ms=_latency_ms(started),
         )
     except TimeoutError as exc:
@@ -755,6 +1139,8 @@ def _agent_request_id(request: AgentQueryRequest) -> str | None:
 def _agent_error_code(exc: Exception) -> str:
     if isinstance(exc, TimeoutError):
         return "AGENT_TIMEOUT"
+    if isinstance(exc, ToolResultValidationError):
+        return "MISSING_REQUIRED_TOOL_RESULT"
     if isinstance(exc, (DecisionValidationError, ValidationError)):
         return "VALIDATION_FAILED"
     return "INTERNAL_ERROR"

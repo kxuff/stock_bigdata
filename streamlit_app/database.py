@@ -28,7 +28,8 @@ def get_engine() -> Engine:
 
 def read_sql(sql: str, params: dict | None = None) -> pd.DataFrame:
     with get_engine().connect() as connection:
-        return pd.read_sql_query(text(sql), connection, params=params or {})
+        result = connection.execute(text(sql), params or {})
+        return pd.DataFrame(result.fetchall(), columns=list(result.keys()))
 
 
 def quote_identifier(identifier: str) -> str:

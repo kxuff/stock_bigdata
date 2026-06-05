@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
+from services.advisory_api import fetch_advisory_picks
+
 
 DEFAULT_LOCAL_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "eod_batch"
 LOCAL_CONTAINER_DATA_DIR = Path("/opt/airflow/data/eod_batch")
@@ -33,6 +35,14 @@ class InferenceAvailability:
     refresh_error: str | None = None
 
 
+@dataclass(frozen=True)
+class PicksLoadResult:
+    frame: pd.DataFrame
+    source: str
+    warnings: list[str]
+    error: str | None = None
+
+
 def ml_inference_url() -> str | None:
     value = os.getenv("ML_INFERENCE_PICKS_URL", "").strip()
     return value or None
@@ -40,22 +50,50 @@ def ml_inference_url() -> str | None:
 
 def fetch_ml_inference_picks(limit: int = 25, timeout: float = 10.0) -> pd.DataFrame:
     """Return latest model picks in the display contract used by AI Stock Picks."""
+    return fetch_ml_inference_picks_result(limit=limit, timeout=timeout).frame
+
+
+def fetch_ml_inference_picks_result(limit: int = 25, timeout: float = 10.0) -> PicksLoadResult:
+    """Return latest model picks plus source and diagnostic warnings for UI."""
     endpoint = ml_inference_url()
     if endpoint:
-        response = requests.get(endpoint, params={"limit": limit}, timeout=timeout)
-        response.raise_for_status()
-        payload = response.json()
-        records = payload.get("data", payload) if isinstance(payload, dict) else payload
-        return normalize_ml_inference_picks(pd.DataFrame(records), limit=limit)
+        frame, warnings = _fetch_http_picks(endpoint, limit=limit, timeout=timeout)
+        return PicksLoadResult(frame=frame, source="http", warnings=warnings)
 
-    availability = ensure_latest_ml_inference()
-    if availability.refresh_error and availability.prediction_path is None:
-        raise RuntimeError(availability.refresh_error)
+    try:
+        payload = fetch_advisory_picks(limit=limit, timeout=timeout)
+        records, warnings = _records_and_warnings(payload)
+        return PicksLoadResult(
+            frame=normalize_ml_inference_picks(pd.DataFrame(records), limit=limit),
+            source="orca_api",
+            warnings=warnings,
+        )
+    except requests.RequestException as exc:
+        api_error = str(exc)
 
-    prediction_path = availability.prediction_path
+    if os.getenv(AUTO_REFRESH_ENV, "false").lower() in {"1", "true", "yes"}:
+        availability = ensure_latest_ml_inference()
+        if availability.refresh_error and availability.prediction_path is None:
+            raise RuntimeError(availability.refresh_error)
+        prediction_path = availability.prediction_path
+        refresh_warning = availability.refresh_error
+    else:
+        prediction_path = _latest_prediction_path()
+        refresh_warning = None
     if prediction_path is None:
-        return _empty_picks_frame()
-    return normalize_ml_inference_picks(pd.read_parquet(prediction_path), limit=limit)
+        warnings = [f"ORCA API unavailable: {api_error}", "No local prediction output found."]
+        if refresh_warning:
+            warnings.append(refresh_warning)
+        return PicksLoadResult(frame=_empty_picks_frame(), source="none", warnings=warnings, error=api_error)
+    warnings = [f"ORCA API unavailable: {api_error}"]
+    if refresh_warning:
+        warnings.append(refresh_warning)
+    return PicksLoadResult(
+        frame=normalize_ml_inference_picks(pd.read_parquet(prediction_path), limit=limit),
+        source="local_parquet",
+        warnings=warnings,
+        error=api_error,
+    )
 
 
 def ensure_latest_ml_inference(today: date | None = None) -> InferenceAvailability:
@@ -118,7 +156,15 @@ def normalize_ml_inference_picks(frame: pd.DataFrame, limit: int = 25) -> pd.Dat
     if normalized["FinalScore"].isna().all():
         normalized["FinalScore"] = normalized["Pred_A"] * (1 - normalized["Risk_Prob_%"] / 100)
 
-    result = normalized[["Date", "Ticker", "Entry_Price", "Pred_A", "Risk_Prob_%", "FinalScore"]]
+    ready = _first_existing(normalized, ["Ready", "ready"])
+    if ready.isna().all():
+        normalized["Ready"] = True
+    else:
+        normalized["Ready"] = ready.fillna(False).astype(bool)
+    warnings = _first_existing(normalized, ["Warnings", "warnings"])
+    normalized["Warnings"] = warnings.map(_warnings_value)
+
+    result = normalized[["Date", "Ticker", "Entry_Price", "Pred_A", "Risk_Prob_%", "FinalScore", "Ready", "Warnings"]]
     result = result.dropna(subset=["Date", "Ticker", "Pred_A", "Risk_Prob_%", "FinalScore"])
     result = result[
         (result["Pred_A"] >= MIN_PRED_A)
@@ -126,6 +172,24 @@ def normalize_ml_inference_picks(frame: pd.DataFrame, limit: int = 25) -> pd.Dat
     ]
     result = result.sort_values(["Date", "FinalScore"], ascending=[False, False])
     return result.head(limit).reset_index(drop=True)
+
+
+def _fetch_http_picks(endpoint: str, *, limit: int, timeout: float) -> tuple[pd.DataFrame, list[str]]:
+    response = requests.get(endpoint, params={"limit": limit}, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    records, warnings = _records_and_warnings(payload)
+    return normalize_ml_inference_picks(pd.DataFrame(records), limit=limit), warnings
+
+
+def _records_and_warnings(payload: Any) -> tuple[Any, list[str]]:
+    if isinstance(payload, dict):
+        warnings = payload.get("warnings") or []
+        if isinstance(warnings, str):
+            warnings = [warnings]
+        records = payload.get("data", payload)
+        return records, [str(item) for item in warnings if str(item)]
+    return payload, []
 
 
 def _run_local_pipeline(run_date: date) -> None:
@@ -340,5 +404,18 @@ def _first_existing(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     return pd.Series([pd.NA] * len(frame), index=frame.index)
 
 
+def _warnings_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "; ".join(str(item) for item in value if str(item))
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
 def _empty_picks_frame() -> pd.DataFrame:
-    return pd.DataFrame(columns=["Date", "Ticker", "Entry_Price", "Pred_A", "Risk_Prob_%", "FinalScore"])
+    return pd.DataFrame(columns=["Date", "Ticker", "Entry_Price", "Pred_A", "Risk_Prob_%", "FinalScore", "Ready", "Warnings"])

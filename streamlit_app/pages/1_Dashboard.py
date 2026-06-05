@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import ceil
 
 import pandas as pd
 import streamlit as st
 
+from components.charts import build_stock_figure
 from components.market import render_market_overview
 from components.news import render_news_cards
 from components.styles import inject_global_styles
@@ -15,6 +16,7 @@ from data_loader import (
     load_latest_market,
     load_market_overview,
     load_news,
+    load_stock_history,
     load_symbols,
 )
 
@@ -110,7 +112,36 @@ def render_stock_monitor_fragment() -> None:
     total_pages = max(1, ceil(len(market_df) / page_size))
     market_page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
     st.caption(f"{len(market_df):,} symbols - page {market_page}/{total_pages}")
-    st.dataframe(format_market_table(page_slice(market_df, int(market_page), int(page_size))), width="stretch", hide_index=True)
+    st.dataframe(
+        format_market_table(page_slice(market_df, int(market_page), int(page_size))),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+@st.fragment(run_every="60s")
+def render_symbol_detail_fragment() -> None:
+    st.markdown('<div class="section-title">Symbol Detail</div>', unsafe_allow_html=True)
+    if not symbols:
+        st.info("No symbols available for charting.")
+        return
+
+    default_symbol = "AAPL" if "AAPL" in symbols else symbols[0]
+    default_index = symbols.index(default_symbol)
+    symbol_col, lookback_col = st.columns([2, 1])
+    chart_symbol = symbol_col.selectbox("Chart symbol", symbols, index=default_index)
+    lookback_days = lookback_col.selectbox("Lookback days", [7, 30, 90, 180, 365], index=2)
+    start_time = datetime.now() - timedelta(days=int(lookback_days))
+
+    try:
+        history = load_stock_history(str(chart_symbol), start_time)
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Cannot load {chart_symbol} price history: {exc}")
+        return
+    if history.empty:
+        st.info(f"No price history found for {chart_symbol} in the selected lookback window.")
+        return
+    st.plotly_chart(build_stock_figure(history, str(chart_symbol)), use_container_width=True)
 
 
 @st.fragment(run_every="300s")
@@ -181,10 +212,11 @@ def render_alerts_fragment() -> None:
             "message": "Message",
         }
     )[["Symbol", "Event Time", "Alert Type", "Alert Level", "Message"]]
-    st.dataframe(display_alerts.style.apply(level_style, axis=1), width="stretch", hide_index=True)
+    st.dataframe(display_alerts.style.apply(level_style, axis=1), use_container_width=True, hide_index=True)
 
 
 render_market_fragment()
 render_stock_monitor_fragment()
+render_symbol_detail_fragment()
 render_news_fragment()
 render_alerts_fragment()

@@ -75,7 +75,9 @@ def pending_jobs() -> list[dict]:
 
 
 def add_job(job_dict: dict) -> None:
-    pending_jobs().append(job_dict)
+    jobs = [job for job in pending_jobs() if job.get("job_id") != job_dict.get("job_id")]
+    jobs.append(job_dict)
+    st.session_state.pending_orca_jobs = jobs
     sync_jobs_to_query()
 
 
@@ -91,8 +93,20 @@ def sync_jobs_to_query() -> None:
     if not jobs:
         st.query_params.pop("orca_jobs", None)
         return
-    compact = [{"job_id": j.get("job_id"), "kind": j.get("kind"), "symbol": j.get("symbol"),
-                "created_at": j.get("created_at"), "status": j.get("status")} for j in jobs]
+    compact = [
+        {
+            "job_id": j.get("job_id"),
+            "kind": j.get("kind"),
+            "symbol": j.get("symbol"),
+            "prompt": j.get("prompt"),
+            "created_at": j.get("created_at"),
+            "status": j.get("status"),
+            "result_fetched": bool(j.get("result_fetched")),
+            "events_complete": bool(j.get("events_complete")),
+            "portfolio_metadata": j.get("portfolio_metadata") or {},
+        }
+        for j in jobs
+    ]
     encoded = base64.urlsafe_b64encode(
         json.dumps(compact, separators=(",", ":")).encode()
     ).decode().rstrip("=")
@@ -110,7 +124,17 @@ def _load_jobs_from_query() -> list[dict]:
         return []
     if not isinstance(jobs, list):
         return []
-    return [j for j in jobs if isinstance(j, dict) and j.get("job_id")]
+    restored = []
+    for job in jobs:
+        if not isinstance(job, dict) or not job.get("job_id"):
+            continue
+        job.setdefault("kind", "agent_query")
+        job.setdefault("status", "queued")
+        job.setdefault("result_fetched", False)
+        job.setdefault("events_complete", True)
+        job.setdefault("portfolio_metadata", {})
+        restored.append(job)
+    return restored
 
 
 # ── Time helpers ──────────────────────────────────────────────────────────────
@@ -131,13 +155,13 @@ def parse_iso(value: str | None) -> datetime | None:
 
 def fmt_time(value: str | None) -> str:
     parsed = parse_iso(value)
-    return parsed.strftime("%H:%M:%S") if parsed else "—"
+    return parsed.strftime("%H:%M:%S") if parsed else "n/a"
 
 
 def fmt_elapsed(start: str | None) -> str:
     s = parse_iso(start)
     if not s:
-        return "—"
+        return "n/a"
     secs = max(0, int((utc_now() - s).total_seconds()))
     m, s2 = divmod(secs, 60)
     return f"{m}m {s2}s" if m else f"{s2}s"

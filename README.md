@@ -14,6 +14,13 @@ Sentiment requires FinBERT. If `FINBERT_API_URL` is missing or unreachable, the 
 
 ## Start the stack
 
+Set required live dependency env vars first, or use `scripts/reset_and_run_local.ps1` below:
+
+```powershell
+$env:FINBERT_API_URL='https://your-finbert-url'
+$env:NINEROUTER_KEY='sk-...'
+```
+
 ```bash
 docker compose up -d
 docker compose ps
@@ -52,7 +59,7 @@ pip install -r streamlit_app/requirements.txt
 streamlit run streamlit_app/app.py
 ```
 
-Pages include Dashboard, AI Chat, and AI Stock Picks. No backend calls run by default.
+Pages include Dashboard, AI Chat, and AI Stock Picks. AI Chat and AI Stock Picks prefer the live ORCA API and show clear offline/data warnings when the API or lakehouse data is unavailable.
 
 ## Configure secrets
 
@@ -71,7 +78,7 @@ export NINEROUTER_KEY="sk-..."
 `docker-compose.yml` passes it as:
 
 ```yaml
-LLM_API_KEY: ${NINEROUTER_KEY:-dummy}
+LLM_API_KEY: ${NINEROUTER_KEY:?NINEROUTER_KEY is required for ORCA LLM gateway}
 ```
 
 ## Check FinBERT
@@ -98,21 +105,22 @@ You can run the full reset/bootstrap flow with the helper script:
 .\scripts\reset_and_run_local.ps1 `
   -ResetDocker `
   -RemoveLocalData `
+  -FinbertUrl 'https://your-finbert-url' `
   -NinerouterKey 'sk-...'
 ```
 
-The script resets optional local state, starts Docker services, checks FinBERT, runs EOD initial load, and starts ORCA API. Any failed step throws and stops the script.
+The script resets optional generated local state, keeps `data/models`, starts Docker services, checks FinBERT, runs EOD initial load for `AAPL,MSFT,NVDA` on `2026-05-29`, starts ORCA API/worker, and verifies health/readiness/coverage/picks. Any failed step throws and stops the script.
 
 PowerShell:
 
 ```powershell
 docker compose exec -T `
   -e PYTHONPATH='/opt/airflow/plugins' `
-  -e US_STOCK_EOD_DATA_DIR='/tmp/eod_batch' `
+  -e US_STOCK_EOD_DATA_DIR='/opt/airflow/data/eod_batch' `
   -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' `
   -e US_STOCK_SPARK_EXECUTOR_CORES='1' `
   -e US_STOCK_SPARK_CORES_MAX='1' `
-  -e US_STOCK_EOD_SYMBOLS='AAPL' `
+  -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' `
   -e US_STOCK_INITIAL_LOAD='true' `
   -e US_STOCK_BACKFILL_CALENDAR_DAYS='500' `
   -e FINBERT_API_URL='https://your-finbert-url' `
@@ -125,11 +133,11 @@ Bash:
 ```bash
 docker compose exec -T \
   -e PYTHONPATH='/opt/airflow/plugins' \
-  -e US_STOCK_EOD_DATA_DIR='/tmp/eod_batch' \
+  -e US_STOCK_EOD_DATA_DIR='/opt/airflow/data/eod_batch' \
   -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' \
   -e US_STOCK_SPARK_EXECUTOR_CORES='1' \
   -e US_STOCK_SPARK_CORES_MAX='1' \
-  -e US_STOCK_EOD_SYMBOLS='AAPL' \
+  -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' \
   -e US_STOCK_INITIAL_LOAD='true' \
   -e US_STOCK_BACKFILL_CALENDAR_DAYS='500' \
   -e FINBERT_API_URL='https://your-finbert-url' \
@@ -141,20 +149,20 @@ Pipeline stages:
 
 ```text
 extract_eod_prices
-→ clean_validate_prices
-→ engineer_features
-→ run_ml_inference
-→ save_predictions
+-> clean_validate_prices
+-> engineer_features
+-> run_ml_inference
+-> save_predictions
 ```
 
 Expected manifest fields:
 
 ```json
 {
-  "prediction_rows": 1,
-  "orca_context_rows": 1,
-  "sentiment_rows": 1,
-  "valuation_rows": 1,
+  "prediction_rows": 3,
+  "orca_context_rows": 3,
+  "sentiment_rows": 3,
+  "valuation_rows": 3,
   "orca_context_includes": [
     "market_features",
     "ml_predictions",
@@ -168,7 +176,7 @@ Expected manifest fields:
 ## Iceberg tables written
 
 ```text
-nessie.ml_ready.stock_predictions
+nessie.ml_ready.stock_predictions_v2
 nessie.ml_ready.stock_price_features
 nessie.curated.us_stock_eod_prices
 nessie.ml_ready.stock_sentiment_context
@@ -201,6 +209,16 @@ The compose service uses local Spark inside the ORCA container for lower-latency
 
 ```yaml
 ORCA_SPARK_MASTER: local[2]
+```
+
+Smoke-check the demo APIs:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/healthz
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/status
+Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/data/readiness?symbols=AAPL&decision_mode=single_symbol_advisory' -TimeoutSec 120
+Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/data/coverage?symbols=AAPL,MSFT,NVDA' -TimeoutSec 120
+Invoke-RestMethod 'http://127.0.0.1:8000/api/v1/advisory/picks?limit=25&min_pred_a=0.06&max_risk_prob=0.3' -TimeoutSec 120
 ```
 
 Call the API:
@@ -256,18 +274,18 @@ ORCA live advisory can be slow because CrewAI runs multiple LLM-backed tasks.
 
 ## Run tests
 
-ORCA provider tests:
-
-```bash
-cd orca-agent-advisory
-uv run --python 3.12 pytest tests/test_bigdata_ml_provider.py
-```
-
-EOD sentiment tests:
+Run the full root gate:
 
 ```powershell
-$env:PYTHONPATH='airflow/plugins'
-python -m pytest tests/test_agent_context.py
+python -m pytest -q
+```
+
+Run the full ORCA gate:
+
+```powershell
+Push-Location orca-agent-advisory
+uv run --python 3.12 pytest -q
+Pop-Location
 ```
 
 Compile EOD plugins:

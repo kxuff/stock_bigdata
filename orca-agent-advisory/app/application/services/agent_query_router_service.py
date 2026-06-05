@@ -39,6 +39,10 @@ class AgentQueryRouterService:
             route = AgentRoute.CLARIFICATION
             needs_clarification = True
             message = "Which symbols should ORCA compare or review?"
+        elif route == AgentRoute.PORTFOLIO_RECOMMENDATION and not symbols:
+            route = AgentRoute.CLARIFICATION
+            needs_clarification = True
+            message = "Portfolio recommendation needs holdings metadata or portfolio symbols."
         elif route == AgentRoute.UNIVERSE_SCREEN and not (symbols or request.context.universe):
             message = message or "Screening latest ORCA prediction universe."
 
@@ -53,7 +57,18 @@ class AgentQueryRouterService:
 
     def _fallback(self, request: AgentQueryRequest) -> RoutedAgentQuery:
         symbols = _unique_symbols([*_context_symbols(request), *_extract_symbols(request.message)])
-        if len(symbols) > 1:
+        lower_message = request.message.lower()
+        if _portfolio_rebalance_intent(lower_message):
+            route = AgentRoute.PORTFOLIO_REBALANCE
+            message = "Routing to planning-only portfolio rebalance."
+        elif _portfolio_recommendation_intent(lower_message):
+            route = AgentRoute.PORTFOLIO_RECOMMENDATION if symbols else AgentRoute.CLARIFICATION
+            message = (
+                "Routing to portfolio recommendation."
+                if symbols
+                else "Portfolio recommendation needs holdings metadata or portfolio symbols."
+            )
+        elif len(symbols) > 1:
             route = AgentRoute.SYMBOL_COMPARISON
             message = "Routing to comparison for detected symbols."
         elif len(symbols) == 1:
@@ -73,7 +88,16 @@ class AgentQueryRouterService:
 
 
 def _context_symbols(request: AgentQueryRequest) -> list[str]:
-    return [s for s in [request.context.symbol, *request.context.symbols, *request.context.watchlist] if s]
+    return [
+        s
+        for s in [
+            request.context.symbol,
+            *request.context.symbols,
+            *request.context.watchlist,
+            *_metadata_holding_symbols(request.context.metadata),
+        ]
+        if s
+    ]
 
 
 def _extract_symbols(message: str) -> list[str]:
@@ -97,9 +121,44 @@ def _unique_symbols(values: list[str]) -> list[str]:
     return symbols
 
 
+def _metadata_holding_symbols(metadata: dict) -> list[str]:
+    raw = metadata.get("holdings") or metadata.get("portfolio")
+    if isinstance(raw, dict):
+        raw = raw.get("holdings") or raw.get("positions") or raw.get("assets")
+    if not isinstance(raw, list):
+        return []
+    symbols: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or item.get("ticker") or "").strip().upper()
+        if symbol and symbol != "CASH":
+            symbols.append(symbol)
+    return symbols
+
+
+def _portfolio_recommendation_intent(message: str) -> bool:
+    phrases = (
+        "portfolio recommendation",
+        "asset allocation",
+        "recommend allocation",
+        "allocation recommendation",
+        "recommend my portfolio",
+        "allocate my portfolio",
+    )
+    return any(phrase in message for phrase in phrases)
+
+
+def _portfolio_rebalance_intent(message: str) -> bool:
+    if "rebalance" not in message:
+        return False
+    return "planning only" in message or "no advisory" in message or "current portfolio" in message
+
+
 def _suggested_actions(route: AgentRoute, symbols: list[str]) -> list[SuggestedAction]:
     actions = [SuggestedAction(label="Ask for single-symbol advisory", route=AgentRoute.SINGLE_SYMBOL_ADVISORY)]
     actions.extend(SuggestedAction(label=f"Analyze {symbol}", route=AgentRoute.SINGLE_SYMBOL_ADVISORY, symbol=symbol) for symbol in symbols[:3])
+    actions.append(SuggestedAction(label="Portfolio allocation", route=AgentRoute.PORTFOLIO_RECOMMENDATION, symbols=symbols[:5]))
     if route != AgentRoute.SYMBOL_COMPARISON:
         actions.append(SuggestedAction(label="Compare symbols", route=AgentRoute.SYMBOL_COMPARISON, symbols=symbols[:5]))
     return actions

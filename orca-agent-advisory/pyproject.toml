@@ -10,6 +10,7 @@ dependencies = [
     "litellm>=1.86,<2",
     "pydantic>=2.8,<3",
     "psycopg[binary]>=3.2,<4",
+    "pyspark==3.5.0",
     "pyyaml>=6.0,<7",
     "redis>=5.0,<6",
     "rq>=2.0,<3",
