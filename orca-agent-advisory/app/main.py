@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
 import json
+import logging
+import time
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
@@ -12,20 +15,30 @@ from pydantic import ValidationError
 
 from app.schemas.decision import ErrorResponse, PortfolioDecision, SingleSymbolDecision
 from app.schemas.request import AdvisoryDecisionRequest
+from app.schemas.agent import AgentQueryRequest, AgentQueryResponse
 from app.schemas.tool_results import ToolResultValidationError
 from app.config import load_settings
 from app.application.ports.tool_result_provider import ToolResultProvider
 from app.application.use_cases.advisory_decision_service import AdvisoryDecisionService, DecisionValidationError
-from app.bootstrap.container import build_decision_service, build_tool_result_provider
+from app.application.use_cases.autonomous_agent_service import AutonomousAgentService
+from app.bootstrap.container import build_autonomous_agent_service, build_decision_service, build_tool_result_provider
 from app.infrastructure.storage.decision_job_store import (
     DecisionJobStore,
     IdempotencyConflictError,
     PostgresDecisionJobStore,
 )
+from app.infrastructure.storage.agent_route_audit_store import (
+    AgentRouteAuditEntry,
+    AgentRouteAuditStore,
+    NoopAgentRouteAuditStore,
+    PostgresAgentRouteAuditStore,
+)
 from app.infrastructure.queue.decision_job_queue import DecisionJobQueue
 
 
 app = FastAPI(title="Orca Agent Advisory API", version="0.1.0")
+logger = logging.getLogger(__name__)
+
 
 # Dev/first-cut job store only. In-memory dict is not multi-worker safe.
 _jobs: dict[str, dict[str, Any]] = {}
@@ -34,6 +47,8 @@ _job_store: DecisionJobStore | None = None
 _job_store_lock = Lock()
 _job_queue: DecisionJobQueue | None = None
 _job_queue_lock = Lock()
+_agent_route_audit_store: AgentRouteAuditStore | None = None
+_agent_route_audit_store_lock = Lock()
 
 
 def get_decision_service() -> AdvisoryDecisionService:
@@ -42,6 +57,10 @@ def get_decision_service() -> AdvisoryDecisionService:
 
 def get_tool_result_provider() -> ToolResultProvider:
     return build_tool_result_provider(load_settings())
+
+
+def get_autonomous_agent_service() -> AutonomousAgentService:
+    return build_autonomous_agent_service(load_settings())
 
 
 def get_decision_job_store() -> DecisionJobStore | None:
@@ -67,6 +86,24 @@ def get_decision_job_queue() -> DecisionJobQueue | None:
         if _job_queue is None:
             _job_queue = DecisionJobQueue(settings)
         return _job_queue
+
+
+def get_agent_route_audit_store() -> AgentRouteAuditStore:
+    global _agent_route_audit_store
+    settings = load_settings()
+    if not settings.agent_route_audit_database_url:
+        return NoopAgentRouteAuditStore()
+    with _agent_route_audit_store_lock:
+        if _agent_route_audit_store is None:
+            try:
+                _agent_route_audit_store = PostgresAgentRouteAuditStore(
+                    settings.agent_route_audit_database_url,
+                    table_name=settings.agent_route_audit_table,
+                )
+            except Exception as exc:  # noqa: BLE001 - audit must never block traffic.
+                logger.warning("agent route audit store unavailable: %s", exc)
+                _agent_route_audit_store = NoopAgentRouteAuditStore()
+        return _agent_route_audit_store
 
 
 @app.get("/healthz")
@@ -151,6 +188,152 @@ def create_advisory_decision(
 
 @app.post("/api/v1/advisory/decision-jobs", status_code=status.HTTP_202_ACCEPTED)
 def create_advisory_decision_job(
+    request: AdvisoryDecisionRequest,
+    http_request: Request,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    return _create_decision_job(request, http_request, background_tasks)
+
+
+@app.post("/api/v1/agent/query", response_model=AgentQueryResponse)
+def create_agent_query(
+    request: AgentQueryRequest,
+    http_request: Request,
+    autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
+    audit_store: AgentRouteAuditStore = Depends(get_agent_route_audit_store),
+) -> AgentQueryResponse:
+    started = time.perf_counter()
+    try:
+        response = autonomous_agent_service.query(request)
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            http_request=http_request,
+            response=response,
+            status="succeeded",
+            latency_ms=_latency_ms(started),
+        )
+        return response
+    except Exception as exc:
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            http_request=http_request,
+            status="failed",
+            error_code=_agent_error_code(exc),
+            latency_ms=_latency_ms(started),
+        )
+        raise
+
+
+@app.post("/api/v1/agent/query-jobs", status_code=status.HTTP_202_ACCEPTED)
+def create_agent_query_job(
+    request: AgentQueryRequest,
+    http_request: Request,
+    background_tasks: BackgroundTasks,
+    autonomous_agent_service: AutonomousAgentService = Depends(get_autonomous_agent_service),
+    audit_store: AgentRouteAuditStore = Depends(get_agent_route_audit_store),
+) -> dict[str, Any]:
+    job_id = str(uuid4())
+    now = _now_iso()
+    job = {
+        "job_id": job_id,
+        "request_id": "UNKNOWN",
+        "status": "queued",
+        "progress": 0,
+        "progress_stage": "queued",
+        "run_id": None,
+        "error": None,
+        "result": None,
+        "created_at": now,
+        "updated_at": now,
+        "started_at": None,
+        "completed_at": None,
+    }
+    with _jobs_lock:
+        _jobs[job_id] = job
+    background_tasks.add_task(
+        _run_agent_query_job,
+        job_id,
+        request,
+        autonomous_agent_service,
+        audit_store,
+        http_request.headers.get("X-Tenant-Id"),
+        http_request.headers.get("X-User-Id"),
+    )
+    return _job_public(job, include_links=True, base_path="/api/v1/agent/query-jobs")
+
+
+@app.get("/api/v1/agent/query-jobs/{job_id}", response_model=None)
+def get_agent_query_job(job_id: str) -> JSONResponse | dict[str, Any]:
+    job = _get_job(job_id)
+    if job is None:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "job not found"})
+    return _job_public(job, base_path="/api/v1/agent/query-jobs")
+
+
+@app.get("/api/v1/agent/query-jobs/{job_id}/result", response_model=None)
+def get_agent_query_job_result(job_id: str) -> JSONResponse | dict[str, Any]:
+    job = _get_job(job_id)
+    if job is None:
+        return _error_response(
+            request_id="UNKNOWN",
+            status_code=status.HTTP_404_NOT_FOUND,
+            error_code="JOB_NOT_FOUND",
+            message="job not found",
+            recoverable=False,
+        )
+    if job["status"] == "failed":
+        error = job["error"]
+        if isinstance(error, dict) and "status_code" in error and "body" in error:
+            return JSONResponse(status_code=error["status_code"], content=error["body"])
+        return _error_response(
+            request_id=job.get("request_id") or "UNKNOWN",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code="INTERNAL_ERROR",
+            message=str(error) or "agent query job failed",
+            recoverable=True,
+        )
+    if job["status"] != "succeeded":
+        return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=_job_public(job, base_path="/api/v1/agent/query-jobs"))
+    return job["result"]
+
+
+@app.get("/api/v1/agent/query-jobs/{job_id}/events", response_model=None)
+async def stream_agent_query_job_events(job_id: str) -> StreamingResponse:
+    async def event_stream():
+        previous_payload = None
+        while True:
+            job = _get_job(job_id)
+            if job is None:
+                yield _sse_event("error", {"error_code": "JOB_NOT_FOUND", "message": "job not found"})
+                return
+
+            public_job = _job_public(job, base_path="/api/v1/agent/query-jobs")
+            payload = json.dumps(public_job, separators=(",", ":"), sort_keys=True)
+            if payload != previous_payload:
+                yield _sse_event("status", public_job)
+                previous_payload = payload
+            else:
+                yield _sse_event("heartbeat", {"job_id": job_id, "time": _now_iso()})
+
+            if job.get("status") == "succeeded":
+                yield _sse_event("result", job.get("result") or {})
+                return
+            if job.get("status") == "failed":
+                yield _sse_event("failure", job.get("error") or {})
+                return
+
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _create_decision_job(
     request: AdvisoryDecisionRequest,
     http_request: Request,
     background_tasks: BackgroundTasks,
@@ -435,6 +618,152 @@ def _run_decision_job(
         )
 
 
+def _run_agent_query_job(
+    job_id: str,
+    request: AgentQueryRequest,
+    autonomous_agent_service: AutonomousAgentService,
+    audit_store: AgentRouteAuditStore,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    started = time.perf_counter()
+    _update_job(job_id, status="running", progress=10, progress_stage="running", started_at=_now_iso())
+    try:
+        response = autonomous_agent_service.query(request)
+        result = response.model_dump(mode="json")
+        _update_job(
+            job_id,
+            status="succeeded",
+            progress=100,
+            progress_stage="completed",
+            result=result,
+            completed_at=_now_iso(),
+        )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            response=response,
+            status="succeeded",
+            latency_ms=_latency_ms(started),
+        )
+    except TimeoutError as exc:
+        _fail_job(
+            job_id,
+            request_id="UNKNOWN",
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            error_code="AGENT_TIMEOUT",
+            message=str(exc) or "agent execution timed out",
+            recoverable=True,
+        )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            status="failed",
+            error_code="AGENT_TIMEOUT",
+            latency_ms=_latency_ms(started),
+        )
+    except (DecisionValidationError, ValidationError) as exc:
+        _fail_job(
+            job_id,
+            request_id="UNKNOWN",
+            status_code=422,
+            error_code="VALIDATION_FAILED",
+            message=str(exc),
+            recoverable=False,
+        )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            status="failed",
+            error_code="VALIDATION_FAILED",
+            latency_ms=_latency_ms(started),
+        )
+    except Exception as exc:  # noqa: BLE001 - job surface stores failure for result endpoint.
+        _fail_job(
+            job_id,
+            request_id="UNKNOWN",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code="INTERNAL_ERROR",
+            message=str(exc) or "agent query job failed",
+            recoverable=True,
+        )
+        _record_agent_route_audit(
+            audit_store,
+            request=request,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            status="failed",
+            error_code="INTERNAL_ERROR",
+            latency_ms=_latency_ms(started),
+        )
+
+
+def _record_agent_route_audit(
+    audit_store: AgentRouteAuditStore,
+    *,
+    request: AgentQueryRequest,
+    http_request: Request | None = None,
+    job_id: str | None = None,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
+    response: AgentQueryResponse | None = None,
+    status: str,
+    error_code: str | None = None,
+    latency_ms: int | None = None,
+) -> None:
+    if http_request is not None:
+        tenant_id = http_request.headers.get("X-Tenant-Id")
+        user_id = http_request.headers.get("X-User-Id")
+    route = response.route.value if response is not None else None
+    try:
+        audit_store.record(
+            AgentRouteAuditEntry(
+                audit_id=str(uuid4()),
+                request_id=_agent_request_id(request),
+                job_id=job_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                message_hash=hashlib.sha256(request.message.encode("utf-8")).hexdigest(),
+                route=route,
+                router_confidence=response.router_confidence if response is not None else None,
+                symbols=response.symbols if response is not None else list(request.context.symbols),
+                status=status,
+                error_code=error_code,
+                latency_ms=latency_ms,
+                created_at=_now_iso(),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - audit is best-effort.
+        logger.warning("agent route audit failed: %s", exc)
+
+
+def _agent_request_id(request: AgentQueryRequest) -> str | None:
+    value = request.context.metadata.get("request_id")
+    return value if isinstance(value, str) else None
+
+
+def _agent_error_code(exc: Exception) -> str:
+    if isinstance(exc, TimeoutError):
+        return "AGENT_TIMEOUT"
+    if isinstance(exc, (DecisionValidationError, ValidationError)):
+        return "VALIDATION_FAILED"
+    return "INTERNAL_ERROR"
+
+
+def _latency_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
+
+
 def _fail_job(
     job_id: str,
     *,
@@ -465,25 +794,33 @@ def _fail_job(
 
 def _update_job(job_id: str, **updates: Any) -> None:
     updates["updated_at"] = _now_iso()
+    with _jobs_lock:
+        if job_id in _jobs:
+            _jobs[job_id].update(updates)
+            return
     store = get_decision_job_store()
     if store is not None:
         store.update_job(job_id, **updates)
         return
-    with _jobs_lock:
-        if job_id in _jobs:
-            _jobs[job_id].update(updates)
 
 
 def _get_job(job_id: str) -> dict[str, Any] | None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job:
+            return dict(job)
     store = get_decision_job_store()
     if store is not None:
         return store.get_job(job_id)
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        return dict(job) if job else None
+    return None
 
 
-def _job_public(job: dict[str, Any], *, include_links: bool = False) -> dict[str, Any]:
+def _job_public(
+    job: dict[str, Any],
+    *,
+    include_links: bool = False,
+    base_path: str = "/api/v1/advisory/decision-jobs",
+) -> dict[str, Any]:
     public_fields = {
         "job_id",
         "request_id",
@@ -500,9 +837,9 @@ def _job_public(job: dict[str, Any], *, include_links: bool = False) -> dict[str
     payload = {key: value for key, value in job.items() if key in public_fields}
     if include_links:
         payload["links"] = {
-            "status": f"/api/v1/advisory/decision-jobs/{job['job_id']}",
-            "result": f"/api/v1/advisory/decision-jobs/{job['job_id']}/result",
-            "events": f"/api/v1/advisory/decision-jobs/{job['job_id']}/events",
+            "status": f"{base_path}/{job['job_id']}",
+            "result": f"{base_path}/{job['job_id']}/result",
+            "events": f"{base_path}/{job['job_id']}/events",
         }
     return payload
 

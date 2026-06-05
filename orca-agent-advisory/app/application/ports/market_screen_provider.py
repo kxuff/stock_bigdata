@@ -1,0 +1,9 @@
+from typing import Any, Protocol
+
+
+class MarketScreenProvider(Protocol):
+    def screen_latest(self, limit: int = 10) -> list[dict[str, Any]]: ...
+
+    def load_symbols(self, symbols: list[str]) -> list[dict[str, Any]]: ...
+
+    def diagnose(self) -> dict[str, Any]: ...

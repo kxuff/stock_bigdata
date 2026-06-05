@@ -1,0 +1,9 @@
+from typing import Any, Protocol
+
+
+class StreamingObservabilityProvider(Protocol):
+    def get_pipeline_health(self, lookback_minutes: int) -> list[dict[str, Any]]: ...
+
+    def get_symbol_freshness(self, symbols: list[str], lookback_minutes: int) -> list[dict[str, Any]]: ...
+
+    def get_ingestion_lag(self, lookback_minutes: int) -> list[dict[str, Any]]: ...

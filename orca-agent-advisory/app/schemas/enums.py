@@ -50,6 +50,27 @@ class DecisionMode(StrEnum):
     PORTFOLIO_RECOMMENDATION = "portfolio_recommendation"
 
 
+class AgentRoute(StrEnum):
+    SINGLE_SYMBOL_ADVISORY = "single_symbol_advisory"
+    SYMBOL_COMPARISON = "symbol_comparison"
+    WATCHLIST_REVIEW = "watchlist_review"
+    UNIVERSE_SCREEN = "universe_screen"
+    MARKET_BRIEF = "market_brief"
+    PORTFOLIO_REBALANCE = "portfolio_rebalance"
+    BACKTEST_ANALYSIS = "backtest_analysis"
+    DATA_DIAGNOSTICS = "data_diagnostics"
+    STREAMING_PIPELINE_HEALTH = "streaming_pipeline_health"
+    STREAMING_FRESHNESS_CHECK = "streaming_freshness_check"
+    STREAMING_ALERT_REVIEW = "streaming_alert_review"
+    STREAMING_SYMBOL_MONITOR = "streaming_symbol_monitor"
+    STREAMING_FEATURE_DRIFT = "streaming_feature_drift"
+    STREAMING_INGESTION_LAG = "streaming_ingestion_lag"
+    STREAMING_TOPIC_INSPECTION = "streaming_topic_inspection"
+    STREAMING_QUALITY_INCIDENTS = "streaming_quality_incidents"
+    CLARIFICATION = "clarification"
+    OUT_OF_SCOPE = "out_of_scope"
+
+
 class ConflictLevel(StrEnum):
     NONE = "NONE"
     LOW = "LOW"

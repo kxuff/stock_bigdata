@@ -46,7 +46,8 @@ def run(run_date: str) -> dict[str, Any]:
         "orca_upstream_context": inference_manifest.get("orca_upstream_context"),
         "prediction_batch": inference_manifest.get("prediction_batch"),
         "prediction_table": save_manifest.get("prediction_table"),
-        "saved_rows": save_manifest.get("saved_rows"),
+        "saved_prediction_rows": save_manifest.get("saved_prediction_rows"),
+        "saved_feature_rows": save_manifest.get("saved_feature_rows"),
     }
 
 
