@@ -15,11 +15,8 @@ class AgentQueryRouterService:
     planner: AgentRoutePlanner | None = None
 
     def route(self, request: AgentQueryRequest) -> RoutedAgentQuery:
-        try:
-            if self.planner is not None:
-                return self._validate(self.planner.plan(request), request)
-        except Exception:  # noqa: BLE001 - router fallback must fail closed.
-            pass
+        if self.planner is not None:
+            return self._validate(self.planner.plan(request), request)
         return self._fallback(request)
 
     def _validate(self, plan: RoutedAgentQuery, request: AgentQueryRequest) -> RoutedAgentQuery:

@@ -79,10 +79,10 @@ def test_crewai_yaml_configs_define_specialists_and_prompt_boundaries() -> None:
 
 
 def test_agent_factories_wire_yaml_config_and_read_only_tools(monkeypatch) -> None:
-    monkeypatch.setattr(data_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(sentiment_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(valuation_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(risk_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(data_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(sentiment_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(valuation_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(risk_agent, "CrewAgent", FakeAgent)
 
     request = AdvisoryDecisionRequest.model_validate(load_sample("normal_request.json"))
     bundle = ToolResultBundle.model_validate(load_sample("normal_tool_results.json"))
@@ -114,14 +114,14 @@ def test_agent_factories_wire_yaml_config_and_read_only_tools(monkeypatch) -> No
 
 
 def test_task_factories_use_yaml_prompt_json_contracts(monkeypatch) -> None:
-    monkeypatch.setattr(data_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(sentiment_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(valuation_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(risk_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(data_tasks, "Task", FakeTask)
-    monkeypatch.setattr(sentiment_tasks, "Task", FakeTask)
-    monkeypatch.setattr(valuation_tasks, "Task", FakeTask)
-    monkeypatch.setattr(risk_tasks, "Task", FakeTask)
+    monkeypatch.setattr(data_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(sentiment_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(valuation_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(risk_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(data_tasks, "CrewTask", FakeTask)
+    monkeypatch.setattr(sentiment_tasks, "CrewTask", FakeTask)
+    monkeypatch.setattr(valuation_tasks, "CrewTask", FakeTask)
+    monkeypatch.setattr(risk_tasks, "CrewTask", FakeTask)
 
     bundle = ToolResultBundle.model_validate(load_sample("normal_tool_results.json"))
     tools = build_mocked_upstream_tools(bundle)

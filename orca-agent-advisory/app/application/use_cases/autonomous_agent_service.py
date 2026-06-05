@@ -8,8 +8,8 @@ from app.application.use_cases.advisory_decision_service import AdvisoryDecision
 from app.application.use_cases.route_services import AgentRouteServices
 from app.application.use_cases.streaming_route_services import StreamingRouteServices
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse
-from app.schemas.enums import AgentRoute
-from app.schemas.request import AdvisoryDecisionRequest
+from app.schemas.enums import AgentRoute, DecisionMode, InvestmentHorizon, RiskTolerance
+from app.schemas.request import AdvisoryDecisionRequest, UserContext
 
 
 @dataclass
@@ -26,7 +26,19 @@ class AutonomousAgentService:
             return AgentQueryResponse(route=routed.route, status="immediate", message=routed.message, symbols=routed.symbols, suggested_actions=routed.suggested_actions, router_confidence=routed.confidence)
         if routed.route == AgentRoute.SINGLE_SYMBOL_ADVISORY:
             now = datetime.now(UTC)
-            advisory_request = AdvisoryDecisionRequest(request_id=f"agent-{uuid4()}", timestamp=now, as_of_timestamp=now, user_query=request.message, decision_mode="single_symbol_advisory", symbols=[routed.symbols[0]], user_context={"risk_tolerance": request.context.risk_tolerance, "investment_horizon": request.context.investment_horizon}, metadata={"source": "agent_query", "route": routed.route.value})
+            advisory_request = AdvisoryDecisionRequest(
+                request_id=f"agent-{uuid4()}",
+                timestamp=now,
+                as_of_timestamp=now,
+                user_query=request.message,
+                decision_mode=DecisionMode.SINGLE_SYMBOL_ADVISORY,
+                symbols=[routed.symbols[0]],
+                user_context=UserContext(
+                    risk_tolerance=RiskTolerance(request.context.risk_tolerance),
+                    investment_horizon=InvestmentHorizon(request.context.investment_horizon),
+                ),
+                metadata={"source": "agent_query", "route": routed.route.value},
+            )
             tool_results = self.tool_result_provider.get_tool_results(advisory_request)
             decision = self.advisory_service.decide(advisory_request, tool_results)
             return AgentQueryResponse(route=routed.route, status="immediate", message=routed.message, symbols=routed.symbols, result_type="single_symbol_decision", result=decision.model_dump(mode="json"), suggested_actions=routed.suggested_actions, router_confidence=routed.confidence)
@@ -61,4 +73,4 @@ class AutonomousAgentService:
                 return self.streaming_route_services.topic_inspection(routed)
             if routed.route == AgentRoute.STREAMING_QUALITY_INCIDENTS:
                 return self.streaming_route_services.quality_incidents(routed)
-        return AgentQueryResponse(route=routed.route, status="immediate", message="Route recognized, but backend workflow is not implemented yet.", symbols=routed.symbols, suggested_actions=routed.suggested_actions, router_confidence=routed.confidence)
+        raise RuntimeError(f"unsupported agent route: {routed.route.value}")

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 from app.infrastructure.crewai.agents.data_agent import create_market_data_agent
 from app.infrastructure.crewai.agents.risk_agent import create_risk_agent
@@ -9,24 +9,16 @@ from app.infrastructure.crewai.tasks.risk_tasks import create_risk_task
 from app.infrastructure.crewai.tasks.sentiment_tasks import create_sentiment_task
 from app.infrastructure.crewai.tasks.valuation_tasks import create_valuation_task
 
-try:
-    from crewai import Crew, Process
-    from crewai.project import CrewBase, agent, crew, task
-except ModuleNotFoundError:
-    Crew = None
-    Process = None
+from crewai import Crew, Process
+from crewai.project import CrewBase as CrewBaseDecorator
+from crewai.project import agent as crew_agent_decorator
+from crewai.project import crew as crew_decorator
+from crewai.project import task as crew_task_decorator
 
-    def CrewBase(cls: type[Any]) -> type[Any]:
-        return cls
-
-    def agent(func: Any) -> Any:
-        return func
-
-    def task(func: Any) -> Any:
-        return func
-
-    def crew(func: Any) -> Any:
-        return func
+CrewBase = cast(Any, CrewBaseDecorator)
+agent = cast(Any, crew_agent_decorator)
+crew = cast(Any, crew_decorator)
+task = cast(Any, crew_task_decorator)
 
 
 @CrewBase
@@ -103,7 +95,6 @@ class AdvisorySpecialistCrew:
 
     @crew
     def crew(self) -> Any:
-        _require_crewai()
         return Crew(
             agents=self.specialist_agents(),
             tasks=self.specialist_tasks(),
@@ -128,7 +119,3 @@ class AdvisorySpecialistCrew:
             self.risk_task(),
         ]
 
-
-def _require_crewai() -> None:
-    if Crew is None or Process is None:
-        raise RuntimeError("CrewAI is required to create AdvisorySpecialistCrew")

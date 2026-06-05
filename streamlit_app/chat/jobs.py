@@ -8,7 +8,6 @@ from services.advisory_api import (
     fetch_health,
     fetch_status,
     stream_agent_query_job_events,
-    stream_decision_job_events,
 )
 from chat import state
 
@@ -118,8 +117,7 @@ def stream_events(job: dict) -> None:
         if not job.get("job_id"):
             job["status"] = "failed"; job["error_message"] = "Missing job_id."
             return
-        event_source = stream_agent_query_job_events if job.get("kind") == "agent_query" else stream_decision_job_events
-        for event in event_source(job["job_id"]):
+        for event in stream_agent_query_job_events(job["job_id"]):
             etype = event.get("event")
             data  = event.get("data") or {}
             if not isinstance(data, dict):
@@ -135,10 +133,7 @@ def stream_events(job: dict) -> None:
                 if state.is_stale(job):
                     job["status"] = "stale"
             elif etype == "result":
-                if job.get("kind") == "agent_query":
-                    _add_agent_query_result(job["job_id"], data)
-                else:
-                    state.add_decision_once(f"{job['job_id']}:result", data)
+                _add_agent_query_result(job["job_id"], data)
                 job.update({"status": "completed", "result_fetched": True,
                             "events_complete": True, "updated_at": state.utc_now().isoformat()})
                 break

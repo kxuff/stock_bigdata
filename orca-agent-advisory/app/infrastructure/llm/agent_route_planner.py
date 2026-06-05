@@ -19,7 +19,7 @@ class LiteLLMAgentRoutePlanner:
         import litellm
 
         response = litellm.completion(
-            model=self.settings.llm_model or self.settings.deepseek_model,
+            model=self.settings.llm_model,
             api_key=self.settings.llm_api_key.get_secret_value() if self.settings.llm_api_key else None,
             api_base=self.settings.llm_base_url,
             temperature=0,

@@ -1,15 +1,8 @@
 from typing import Any, Sequence
 
-from app.infrastructure.crewai.config_loader import agent_config
-from app.schemas.agent_outputs import SentimentAgentOutput
-from app.schemas.enums import AgentStatus, SentimentLabel, ToolStatus
-from app.schemas.request import AdvisoryDecisionRequest
-from app.schemas.tool_results import ToolResultBundle
+from crewai import Agent as CrewAgent
 
-try:
-    from crewai import Agent
-except ModuleNotFoundError:
-    Agent = None
+from app.infrastructure.crewai.config_loader import agent_config
 
 
 def create_sentiment_agent(
@@ -18,8 +11,7 @@ def create_sentiment_agent(
     tools: Sequence[Any],
     verbose: bool = False,
 ) -> Any:
-    _require_crewai()
-    return Agent(
+    return CrewAgent(
         config=agent_config("sentiment_agent"),
         llm=llm,
         tools=list(tools),
@@ -27,7 +19,3 @@ def create_sentiment_agent(
         allow_delegation=False,
     )
 
-
-def _require_crewai() -> None:
-    if Agent is None:
-        raise RuntimeError("CrewAI is required to create Sentiment Agent")
