@@ -201,3 +201,24 @@ a = ensure_latest_ml_inference(today=date(2026, 6, 8))
 print(a)
 PY
 ```
+.venv/bin/python - <<'PY'
+import pandas as pd
+
+p = "data/eod_batch/staging/20260520/predictions.parquet"
+df = pd.read_parquet(p).sort_values("final_score", ascending=False)
+
+print(df[["Datetime", "Symbol", "entry_price", "pred_a", "risk_prob", "final_score"]].head(20).to_string(index=False))
+PY
+
+
+cd /Volumes/SSD-WDBlue/tohuy/y3s2/stock_bigdata
+
+ML_INFERENCE_AUTO_REFRESH=true \
+US_STOCK_EOD_DATA_DIR="$PWD/data/eod_batch" \
+.venv/bin/python - <<'PY'
+from datetime import date                                
+from streamlit_app.services.ml_inference_api import ensure_latest_ml_inference
+
+availability = ensure_latest_ml_inference(today=date(2026, 5, 20))
+print(availability)
+PY
