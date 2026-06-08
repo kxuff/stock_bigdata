@@ -36,15 +36,12 @@ def engineer_features(clean_manifest: dict[str, Any]) -> dict[str, Any]:
 
         # Tách biệt tính toán cho từng mã cổ phiếu để không bị dính chéo dữ liệu
         for symbol, group in prices.groupby("Symbol"):
-            # Ép Datetime làm Index giống hệt hàm yf.download()
-            group_sorted = group.sort_values("Datetime").set_index("Datetime")
+            group_sorted = group.sort_values("Datetime").copy()
             
             # Tính features cho riêng mã này
             symbol_feats = compute_price_features(group_sorted, spy_close, drop_incomplete=True)
             
             if not symbol_feats.empty:
-                # Trả Datetime từ Index về thành cột bình thường
-                symbol_feats = symbol_feats.reset_index()
                 # Đảm bảo cột Symbol được gắn lại chính xác
                 symbol_feats["Symbol"] = symbol
                 all_symbol_features.append(symbol_feats)

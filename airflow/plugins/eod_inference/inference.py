@@ -141,8 +141,28 @@ def _validate_probability_output(values: np.ndarray, name: str) -> None:
 
 
 def _validate_upside_output(values: np.ndarray, name: str) -> None:
+    """
+    Validate Model A predictions are in expected range [0.01, 0.20] (1-20%).
+    Typically should be around [0.03, 0.10] (3-10%).
+    """
     if not np.isfinite(values).all():
         raise PipelineValidationError(f"{name} must output finite decimal returns.")
+    
+    # Warn if outside typical range, fail if outside extreme range
+    min_val, max_val = values.min(), values.max()
+    if min_val < 0.01 or max_val > 0.20:
+        raise PipelineValidationError(
+            f"{name} predictions {min_val:.4f}-{max_val:.4f} outside expected range [0.01, 0.20]. "
+            f"Check feature data quality and model stability."
+        )
+    
+    if min_val < 0.02 or max_val > 0.15:
+        import warnings
+        warnings.warn(
+            f"{name} predictions {min_val:.4f}-{max_val:.4f} outside typical range [0.03, 0.10]. "
+            f"This is acceptable but may indicate data drift.",
+            UserWarning
+        )
 
 
 def _model_version(model_a: dict[str, Any], model_c: dict[str, Any] | None) -> str:
