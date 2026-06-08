@@ -43,6 +43,8 @@ class AdvisoryDecisionService:
                 last_error = DecisionValidationError(str(exc))
                 if attempt_index >= self.settings.advisory_max_revision_attempts:
                     break
+                if self.crew_runner is None or not hasattr(self.crew_runner, "revise_manager_synthesis"):
+                    break
                 violations = _violation_list(last_error)
                 synthesis = self._revise_synthesis(
                     request=request,

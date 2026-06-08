@@ -19,14 +19,27 @@ class LiteLLMAgentRoutePlanner:
         import litellm
 
         response = litellm.completion(
-            model=self.settings.llm_model or self.settings.deepseek_model,
+            model=self.settings.llm_model,
             api_key=self.settings.llm_api_key.get_secret_value() if self.settings.llm_api_key else None,
             api_base=self.settings.llm_base_url,
             temperature=0,
             timeout=min(self.settings.agent_timeout_seconds, 30),
             messages=[
                 {"role": "system", "content": "You are production stock advisory router. Classify into one allowed route. Use out_of_scope for non-market requests. Return JSON only matching schema."},
-                {"role": "user", "content": json.dumps({"message": request.message, "context": request.context.model_dump(), "allowed_routes": [r.value for r in AgentRoute], "schema": RoutedAgentQuery.model_json_schema()}, default=str)},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "message": request.message,
+                            "conversation_id": request.conversation_id,
+                            "history": [item.model_dump(mode="json") for item in request.history],
+                            "context": request.context.model_dump(),
+                            "allowed_routes": [r.value for r in AgentRoute],
+                            "schema": RoutedAgentQuery.model_json_schema(),
+                        },
+                        default=str,
+                    ),
+                },
             ],
         )
         return RoutedAgentQuery.model_validate(_parse_json(response["choices"][0]["message"]["content"]))

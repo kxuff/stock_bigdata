@@ -23,7 +23,11 @@ from app.schemas.enums import AgentRoute
 
 
 class FakeAutonomousAgentService:
+    def __init__(self) -> None:
+        self.requests = []
+
     def query(self, request):
+        self.requests.append(request)
         route = AgentRoute(request.context.metadata["route"])
         return AgentQueryResponse(
             route=route,
@@ -60,8 +64,8 @@ def _client(service) -> TestClient:
 def _post_route(route: AgentRoute, symbols: list[str] | None = None):
     client = _client(FakeAutonomousAgentService())
     try:
-        return client.post(
-            "/api/v1/agent/query",
+        response = client.post(
+            "/api/v1/query",
             json={
                 "message": f"test {route.value}",
                 "context": {
@@ -70,6 +74,9 @@ def _post_route(route: AgentRoute, symbols: list[str] | None = None):
                 },
             },
         )
+        if response.status_code != 202:
+            return response
+        return client.get(response.json()["links"]["result"])
     finally:
         app.dependency_overrides.clear()
 
@@ -127,7 +134,7 @@ def test_agent_query_rejects_extra_payload_field() -> None:
     client = _client(FakeAutonomousAgentService())
     try:
         response = client.post(
-            "/api/v1/agent/query",
+            "/api/v1/query",
             json={
                 "message": "compare AAPL and MSFT",
                 "context": {"symbols": ["AAPL", "MSFT"]},
@@ -143,15 +150,37 @@ def test_agent_query_rejects_extra_payload_field() -> None:
     assert payload["error_code"] == "INVALID_REQUEST"
 
 
+def test_agent_query_accepts_conversation_context() -> None:
+    service = FakeAutonomousAgentService()
+    client = _client(service)
+    try:
+        response = client.post(
+            "/api/v1/query",
+            json={
+                "message": "what about it?",
+                "conversation_id": "conv-1",
+                "history": [{"role": "user", "content": "Analyze AAPL", "metadata": {"symbol": "AAPL"}, "created_at": "2026-01-02T03:04:05Z"}],
+                "context": {"symbols": ["AAPL"], "metadata": {"route": "single_symbol_advisory"}},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert service.requests[0].conversation_id == "conv-1"
+    assert service.requests[0].history[0].content == "Analyze AAPL"
+    assert service.requests[0].history[0].metadata == {"symbol": "AAPL"}
+
+
 def test_agent_query_service_exception_returns_500() -> None:
     app.dependency_overrides[get_autonomous_agent_service] = lambda: FailingAutonomousAgentService()
     client = TestClient(app, raise_server_exceptions=False)
     try:
-        response = client.post("/api/v1/agent/query", json={"message": "compare AAPL and MSFT"})
+        response = client.post("/api/v1/query", json={"message": "compare AAPL and MSFT"})
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 500
+    assert response.status_code == 202
 
 
 def test_agent_query_success_creates_audit_entry() -> None:
@@ -161,7 +190,7 @@ def test_agent_query_success_creates_audit_entry() -> None:
     client = TestClient(app)
     try:
         response = client.post(
-            "/api/v1/agent/query",
+            "/api/v1/query",
             headers={"X-Tenant-Id": "tenant-1", "X-User-Id": "user-1"},
             json={
                 "message": "compare AAPL and MSFT",
@@ -171,7 +200,7 @@ def test_agent_query_success_creates_audit_entry() -> None:
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert len(audit_store.entries) == 1
     entry = audit_store.entries[0]
     assert entry.request_id == "req-1"
@@ -192,11 +221,11 @@ def test_agent_query_service_failure_creates_audit_entry() -> None:
     app.dependency_overrides[get_agent_route_audit_store] = lambda: audit_store
     client = TestClient(app, raise_server_exceptions=False)
     try:
-        response = client.post("/api/v1/agent/query", json={"message": "compare AAPL and MSFT"})
+        response = client.post("/api/v1/query", json={"message": "compare AAPL and MSFT"})
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 500
+    assert response.status_code == 202
     assert len(audit_store.entries) == 1
     entry = audit_store.entries[0]
     assert entry.status == "failed"
@@ -210,10 +239,10 @@ def test_agent_query_audit_store_failure_does_not_break_response() -> None:
     client = TestClient(app, raise_server_exceptions=False)
     try:
         response = client.post(
-            "/api/v1/agent/query",
+            "/api/v1/query",
             json={"message": "compare AAPL and MSFT", "context": {"metadata": {"route": "symbol_comparison"}}},
         )
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 200
+    assert response.status_code == 202

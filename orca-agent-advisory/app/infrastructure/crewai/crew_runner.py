@@ -18,12 +18,10 @@ from app.schemas.agent_outputs import (
     SentimentAgentOutput,
     ValuationAgentOutput,
 )
-from app.schemas.decision import SingleSymbolDecision
 from app.schemas.manager_outputs import ManagerSynthesisOutput
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle
 from app.infrastructure.crewai.tasks.manager_tasks import create_manager_synthesis_task
-from app.validators.manager_synthesis_parser import parse_manager_synthesis_output
 from app.validators.output_repair import parse_model_output
 
 try:
@@ -51,42 +49,6 @@ class HierarchicalCrewRunner:
     verbose: bool = False
     last_artifacts: CrewRunArtifacts | None = None
 
-    def run(
-        self,
-        request: AdvisoryDecisionRequest,
-        tool_results: ToolResultBundle,
-        *,
-        output_model: type[SingleSymbolDecision] = SingleSymbolDecision,
-    ) -> SingleSymbolDecision:
-        artifacts = self.build_crew(request, tool_results)
-        raw_result = artifacts.crew.kickoff(
-            inputs={
-                "request": request.model_dump(mode="json"),
-                "request_json": request.model_dump_json(),
-            }
-        )
-        return parse_model_output(raw_result, output_model)
-
-    def run_manager_synthesis(
-        self,
-        request: AdvisoryDecisionRequest,
-        tool_results: ToolResultBundle,
-    ) -> ManagerSynthesisOutput:
-        artifacts = self.build_crew(request, tool_results)
-        raw_result = artifacts.crew.kickoff(
-            inputs={
-                "request": request.model_dump(mode="json"),
-                "request_json": request.model_dump_json(),
-                "symbols": ", ".join(request.symbols),
-                "decision_mode": request.decision_mode.value,
-            }
-        )
-
-        pydantic_output = getattr(raw_result, "pydantic", None)
-        if isinstance(pydantic_output, ManagerSynthesisOutput):
-            return pydantic_output
-        return parse_manager_synthesis_output(raw_result, request)
-
     def run_orchestrated(
         self,
         request: AdvisoryDecisionRequest,
@@ -108,7 +70,7 @@ class HierarchicalCrewRunner:
             artifacts.tasks,
             request,
             tool_results,
-            allow_fallback=self.settings.advisory_specialist_parse_fallback,
+            allow_fallback=_allow_specialist_fallback(self.settings, artifacts),
         )
         return CrewOrchestratedOutputs(
             agent_outputs=agent_outputs,
@@ -342,6 +304,12 @@ def _parse_specialist_outputs(
         valuation_agent=valuation_output,
         risk_agent=risk_output,
     )
+
+
+def _allow_specialist_fallback(settings: AgentSettings, artifacts: CrewRunArtifacts) -> bool:
+    if settings.advisory_specialist_parse_fallback:
+        return True
+    return isinstance(getattr(artifacts.manager_agent, "llm", None), str)
 
 
 def _parse_specialist_payload(

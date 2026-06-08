@@ -82,32 +82,68 @@ def _query_payload(route: AgentRoute = AgentRoute.SYMBOL_COMPARISON) -> dict:
 def test_agent_query_job_create_status_result_and_sse_success() -> None:
     client = _client(FakeAutonomousAgentService())
 
-    create_response = client.post("/api/v1/agent/query-jobs", json=_query_payload())
+    create_response = client.post("/api/v1/query", json=_query_payload())
 
     assert create_response.status_code == 202
     created = create_response.json()
     job_id = created["job_id"]
     assert created["status"] == "queued"
     assert created["links"] == {
-        "status": f"/api/v1/agent/query-jobs/{job_id}",
-        "result": f"/api/v1/agent/query-jobs/{job_id}/result",
-        "events": f"/api/v1/agent/query-jobs/{job_id}/events",
+        "status": f"/api/v1/jobs/{job_id}",
+        "result": f"/api/v1/jobs/{job_id}/result",
+        "events": f"/api/v1/jobs/{job_id}/events",
     }
 
-    status_response = client.get(f"/api/v1/agent/query-jobs/{job_id}")
+    status_response = client.get(f"/api/v1/jobs/{job_id}")
     assert status_response.status_code == 200
     status_payload = status_response.json()
     assert status_payload["status"] == "succeeded"
     assert status_payload["progress"] == 100
 
-    result_response = client.get(f"/api/v1/agent/query-jobs/{job_id}/result")
+    result_response = client.get(f"/api/v1/jobs/{job_id}/result")
     assert result_response.status_code == 200
     result = result_response.json()
     assert result["route"] == "symbol_comparison"
     assert result["symbols"] == ["AAPL", "MSFT"]
     assert result["result"] == {"route": "symbol_comparison"}
 
-    with client.stream("GET", f"/api/v1/agent/query-jobs/{job_id}/events") as sse_response:
+    with client.stream("GET", f"/api/v1/jobs/{job_id}/events") as sse_response:
+        assert sse_response.status_code == 200
+        body = sse_response.read().decode()
+    assert "event: status" in body
+    assert "event: result" in body
+    assert '"status":"succeeded"' in body
+
+
+def test_public_agent_query_job_create_status_result_and_sse_success() -> None:
+    client = _client(FakeAutonomousAgentService())
+
+    create_response = client.post("/api/v1/query", json=_query_payload())
+
+    assert create_response.status_code == 202
+    created = create_response.json()
+    job_id = created["job_id"]
+    assert created["status"] == "queued"
+    assert created["links"] == {
+        "status": f"/api/v1/jobs/{job_id}",
+        "result": f"/api/v1/jobs/{job_id}/result",
+        "events": f"/api/v1/jobs/{job_id}/events",
+    }
+
+    status_response = client.get(f"/api/v1/jobs/{job_id}")
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["status"] == "succeeded"
+    assert status_payload["progress"] == 100
+
+    result_response = client.get(f"/api/v1/jobs/{job_id}/result")
+    assert result_response.status_code == 200
+    result = result_response.json()
+    assert result["route"] == "symbol_comparison"
+    assert result["symbols"] == ["AAPL", "MSFT"]
+    assert result["result"] == {"route": "symbol_comparison"}
+
+    with client.stream("GET", f"/api/v1/jobs/{job_id}/events") as sse_response:
         assert sse_response.status_code == 200
         body = sse_response.read().decode()
     assert "event: status" in body
@@ -118,16 +154,16 @@ def test_agent_query_job_create_status_result_and_sse_success() -> None:
 def test_agent_query_job_failed_result_returns_error_response() -> None:
     client = _client(FailingAutonomousAgentService())
 
-    create_response = client.post("/api/v1/agent/query-jobs", json=_query_payload())
+    create_response = client.post("/api/v1/query", json=_query_payload())
 
     assert create_response.status_code == 202
     job_id = create_response.json()["job_id"]
 
-    status_response = client.get(f"/api/v1/agent/query-jobs/{job_id}")
+    status_response = client.get(f"/api/v1/jobs/{job_id}")
     assert status_response.status_code == 200
     assert status_response.json()["status"] == "failed"
 
-    result_response = client.get(f"/api/v1/agent/query-jobs/{job_id}/result")
+    result_response = client.get(f"/api/v1/jobs/{job_id}/result")
     assert result_response.status_code == 500
     payload = result_response.json()
     assert payload["status"] == "ERROR"
@@ -141,7 +177,7 @@ def test_agent_query_job_success_creates_audit_entry() -> None:
     client = _client(FakeAutonomousAgentService())
 
     create_response = client.post(
-        "/api/v1/agent/query-jobs",
+        "/api/v1/query",
         headers={"X-Tenant-Id": "tenant-1", "X-User-Id": "user-1"},
         json=_query_payload(),
     )
@@ -166,7 +202,7 @@ def test_agent_query_job_service_failure_creates_audit_entry() -> None:
     app.dependency_overrides[get_agent_route_audit_store] = lambda: audit_store
     client = _client(FailingAutonomousAgentService())
 
-    create_response = client.post("/api/v1/agent/query-jobs", json=_query_payload())
+    create_response = client.post("/api/v1/query", json=_query_payload())
 
     assert create_response.status_code == 202
     assert len(audit_store.entries) == 1
@@ -179,11 +215,11 @@ def test_agent_query_job_audit_store_failure_does_not_break_job() -> None:
     app.dependency_overrides[get_agent_route_audit_store] = lambda: FakeAuditStore(fail=True)
     client = _client(FakeAutonomousAgentService())
 
-    create_response = client.post("/api/v1/agent/query-jobs", json=_query_payload())
+    create_response = client.post("/api/v1/query", json=_query_payload())
 
     assert create_response.status_code == 202
     job_id = create_response.json()["job_id"]
-    result_response = client.get(f"/api/v1/agent/query-jobs/{job_id}/result")
+    result_response = client.get(f"/api/v1/jobs/{job_id}/result")
     assert result_response.status_code == 200
     assert result_response.json()["route"] == "symbol_comparison"
 
@@ -208,7 +244,7 @@ def test_agent_query_job_result_returns_202_while_queued() -> None:
         }
     client = _client(FakeAutonomousAgentService())
 
-    response = client.get(f"/api/v1/agent/query-jobs/{job_id}/result")
+    response = client.get(f"/api/v1/jobs/{job_id}/result")
 
     assert response.status_code == 202
     assert response.json()["status"] == "queued"
@@ -217,9 +253,9 @@ def test_agent_query_job_result_returns_202_while_queued() -> None:
 def test_agent_query_job_unknown_returns_404() -> None:
     client = _client(FakeAutonomousAgentService())
 
-    status_response = client.get("/api/v1/agent/query-jobs/missing")
-    result_response = client.get("/api/v1/agent/query-jobs/missing/result")
-    with client.stream("GET", "/api/v1/agent/query-jobs/missing/events") as sse_response:
+    status_response = client.get("/api/v1/jobs/missing")
+    result_response = client.get("/api/v1/jobs/missing/result")
+    with client.stream("GET", "/api/v1/jobs/missing/events") as sse_response:
         body = sse_response.read().decode()
 
     assert status_response.status_code == 404

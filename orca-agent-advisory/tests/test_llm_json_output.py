@@ -5,8 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.config import load_settings
-from app.infrastructure.llm.deepseek_client import CrewAIUnavailableError
-from app.infrastructure.llm.llm_factory import create_deepseek_llm
+from app.infrastructure.llm.llm_factory import CrewAIUnavailableError, create_llm
 from app.schemas.decision import SingleSymbolDecision
 from app.validators.output_repair import JsonOutputParseError, parse_json_object, parse_model_output
 
@@ -44,13 +43,13 @@ def test_invalid_llm_json_raises_parse_error() -> None:
 
 
 @pytest.mark.live
-def test_live_deepseek_json_smoke_when_api_key_available() -> None:
+def test_live_9router_json_smoke_when_api_key_available() -> None:
     settings = load_settings()
-    if settings.deepseek_api_key is None and not os.getenv("DEEPSEEK_API_KEY"):
-        pytest.skip("DEEPSEEK_API_KEY is not configured")
+    if settings.llm_api_key is None and not os.getenv("NINEROUTER_KEY"):
+        pytest.skip("NINEROUTER_KEY is not configured")
 
     try:
-        llm = create_deepseek_llm(settings)
+        llm = create_llm(settings)
     except CrewAIUnavailableError as exc:
         pytest.skip(str(exc))
 

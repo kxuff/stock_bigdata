@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from typing import Any
 
 import requests
@@ -43,7 +43,11 @@ def fetch_status(timeout: float = 3.0) -> dict[str, Any]:
     return response.json()
 
 
-def fetch_readiness(symbols: list[str], decision_mode: str = "single_symbol_advisory", timeout: float = 60.0) -> dict[str, Any]:
+def fetch_readiness(
+    symbols: list[str],
+    decision_mode: str = "single_symbol_advisory",
+    timeout: float = 60.0,
+) -> dict[str, Any]:
     response = requests.get(
         api_url("/api/v1/data/readiness"),
         params={"symbols": ",".join(symbols), "decision_mode": decision_mode},
@@ -53,7 +57,11 @@ def fetch_readiness(symbols: list[str], decision_mode: str = "single_symbol_advi
     return response.json()
 
 
-def fetch_data_coverage(symbols: list[str], decision_mode: str = "single_symbol_advisory", timeout: float = 10.0) -> dict[str, Any]:
+def fetch_data_coverage(
+    symbols: list[str],
+    decision_mode: str = "single_symbol_advisory",
+    timeout: float = 10.0,
+) -> dict[str, Any]:
     response = requests.get(
         api_url("/api/v1/data/coverage"),
         params={"symbols": ",".join(symbols), "decision_mode": decision_mode},
@@ -101,7 +109,7 @@ def create_agent_query(payload: dict[str, Any], timeout: float = 30.0) -> dict[s
 
 
 def create_agent_query_job(payload: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
-    response = requests.post(api_url("/api/v1/agent/query-jobs"), json=payload, timeout=timeout)
+    response = requests.post(api_url("/api/v1/query"), json=payload, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -120,7 +128,7 @@ def get_decision_job_result(job_id: str, timeout: float = 10.0) -> tuple[int, di
 
 
 def get_agent_query_job_result(job_id: str, timeout: float = 10.0) -> tuple[int, dict[str, Any]]:
-    response = requests.get(api_url(f"/api/v1/agent/query-jobs/{job_id}/result"), timeout=timeout)
+    response = requests.get(api_url(f"/api/v1/jobs/{job_id}/result"), timeout=timeout)
     if response.status_code not in {200, 202}:
         response.raise_for_status()
     return response.status_code, response.json()
@@ -134,38 +142,21 @@ def stream_decision_job_events(job_id: str, timeout: tuple[float, float | None] 
         timeout=timeout,
     )
     response.raise_for_status()
-    event = "message"
-    data_lines: list[str] = []
-    with response:
-        for raw_line in response.iter_lines(decode_unicode=True):
-            if raw_line is None:
-                continue
-            line = raw_line.strip()
-            if not line:
-                if data_lines:
-                    data = "\n".join(data_lines)
-                    try:
-                        payload = json.loads(data)
-                    except json.JSONDecodeError:
-                        payload = {"raw": data}
-                    yield {"event": event, "data": payload}
-                event = "message"
-                data_lines = []
-                continue
-            if line.startswith("event:"):
-                event = line.removeprefix("event:").strip()
-            elif line.startswith("data:"):
-                data_lines.append(line.removeprefix("data:").strip())
+    yield from _iter_sse_events(response)
 
 
 def stream_agent_query_job_events(job_id: str, timeout: tuple[float, float | None] = (5.0, None)):
     response = requests.get(
-        api_url(f"/api/v1/agent/query-jobs/{job_id}/events"),
+        api_url(f"/api/v1/jobs/{job_id}/events"),
         headers={"Accept": "text/event-stream"},
         stream=True,
         timeout=timeout,
     )
     response.raise_for_status()
+    yield from _iter_sse_events(response)
+
+
+def _iter_sse_events(response: requests.Response):
     event = "message"
     data_lines: list[str] = []
     with response:

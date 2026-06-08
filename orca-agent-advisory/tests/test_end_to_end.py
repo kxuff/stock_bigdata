@@ -169,7 +169,7 @@ def test_single_symbol_manager_synthesis_requires_recommendation(tmp_path: Path)
     request = AdvisoryDecisionRequest.model_validate(load_sample("normal_request.json"))
     bundle = ToolResultBundle.model_validate(load_sample("normal_tool_results.json"))
     service = AdvisoryDecisionService(
-        settings=AgentSettings(advisory_use_crewai_manager=True, advisory_output_dir=tmp_path),
+        settings=AgentSettings(advisory_output_dir=tmp_path),
         crew_runner=PortfolioDraftRunner(),
         output_store=DecisionOutputStore(tmp_path),
     )

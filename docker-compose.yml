@@ -375,6 +375,7 @@ services:
       LLM_PROVIDER: litellm
       LLM_MODEL: openai/oc/deepseek-v4-flash-free
       LLM_BASE_URL: http://host.docker.internal:20128/v1
+      NINEROUTER_KEY: ${NINEROUTER_KEY:?NINEROUTER_KEY is required for ORCA LLM gateway}
       LLM_API_KEY: ${NINEROUTER_KEY:?NINEROUTER_KEY is required for ORCA LLM gateway}
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
@@ -427,6 +428,7 @@ services:
       LLM_PROVIDER: litellm
       LLM_MODEL: openai/oc/deepseek-v4-flash-free
       LLM_BASE_URL: http://host.docker.internal:20128/v1
+      NINEROUTER_KEY: ${NINEROUTER_KEY:?NINEROUTER_KEY is required for ORCA LLM gateway}
       LLM_API_KEY: ${NINEROUTER_KEY:?NINEROUTER_KEY is required for ORCA LLM gateway}
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie

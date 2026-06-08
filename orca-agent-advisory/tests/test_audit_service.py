@@ -18,7 +18,7 @@ def load_sample(name: str) -> dict:
 def test_audit_metadata_contains_deterministic_hashes_and_run_context() -> None:
     request = AdvisoryDecisionRequest.model_validate(load_sample("normal_request.json"))
     bundle = ToolResultBundle.model_validate(load_sample("normal_tool_results.json"))
-    settings = AgentSettings(deepseek_model="deepseek-v4-flash", agent_temperature=0.2)
+    settings = AgentSettings(llm_model="openai/oc/deepseek-v4-flash-free", agent_temperature=0.2)
     created_at = datetime(2026, 5, 14, 12, 0, tzinfo=UTC)
 
     audit = create_audit_metadata(

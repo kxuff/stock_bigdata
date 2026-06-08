@@ -7,7 +7,6 @@ from app.infrastructure.crewai.agents import data_agent, manager_agent, risk_age
 from app.infrastructure.crewai import crew_runner
 from app.infrastructure.crewai.crew_runner import HierarchicalCrewRunner
 from app.infrastructure.crewai.tasks import data_tasks, manager_tasks, risk_tasks, sentiment_tasks, valuation_tasks
-from app.schemas.decision import SingleSymbolDecision
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle
 
@@ -90,16 +89,16 @@ class FakeCrew:
 
 
 def test_hierarchical_crew_uses_custom_manager_and_specialist_tools(monkeypatch) -> None:
-    monkeypatch.setattr(manager_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(data_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(sentiment_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(valuation_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(risk_agent, "Agent", FakeAgent)
-    monkeypatch.setattr(data_tasks, "Task", FakeTask)
-    monkeypatch.setattr(sentiment_tasks, "Task", FakeTask)
-    monkeypatch.setattr(valuation_tasks, "Task", FakeTask)
-    monkeypatch.setattr(risk_tasks, "Task", FakeTask)
-    monkeypatch.setattr(manager_tasks, "Task", FakeTask)
+    monkeypatch.setattr(manager_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(data_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(sentiment_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(valuation_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(risk_agent, "CrewAgent", FakeAgent)
+    monkeypatch.setattr(data_tasks, "CrewTask", FakeTask)
+    monkeypatch.setattr(sentiment_tasks, "CrewTask", FakeTask)
+    monkeypatch.setattr(valuation_tasks, "CrewTask", FakeTask)
+    monkeypatch.setattr(risk_tasks, "CrewTask", FakeTask)
+    monkeypatch.setattr(manager_tasks, "CrewTask", FakeTask)
     monkeypatch.setattr(crew_runner, "Crew", FakeCrew)
     monkeypatch.setattr(crew_runner, "Process", FakeProcess)
 
@@ -110,17 +109,17 @@ def test_hierarchical_crew_uses_custom_manager_and_specialist_tools(monkeypatch)
         llm_factory=lambda settings: "deepseek/deepseek-v4-flash",
     )
 
-    decision = runner.run(request, bundle)
+    outputs = runner.run_orchestrated(request, bundle)
     artifacts = runner.last_artifacts
 
-    assert isinstance(decision, SingleSymbolDecision)
+    assert outputs.agent_outputs.market_data_agent.market_signals
     assert artifacts is not None
     assert artifacts.crew.process == FakeProcess.hierarchical
     assert artifacts.manager_agent not in artifacts.specialist_agents
     assert artifacts.manager_agent.allow_delegation is True
     assert artifacts.manager_agent.role == "Investment Advisory Manager"
     assert artifacts.crew.tracing is True
-    assert artifacts.crew.share_crew is False
+    assert artifacts.crew.share_crew is True
     assert [agent.role for agent in artifacts.specialist_agents] == [
         "Market Data Analyst",
         "Financial Sentiment Analyst",
