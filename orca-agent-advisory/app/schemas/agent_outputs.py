@@ -36,6 +36,7 @@ class MarketDataAgentOutput(BaseAgentOutput):
 
 class SentimentAgentOutput(BaseAgentOutput):
     sentiment_label: SentimentLabel
+    sentiment_score: float | None = Field(default=None, ge=-1.0, le=1.0)
     top_drivers: list[str] = Field(default_factory=list)
 
 
