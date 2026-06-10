@@ -24,16 +24,18 @@ NEWS_TOPIC = os.getenv("NEWS_TOPIC", "stock_news")
 FINNHUB_API_KEY = os.getenv("API_KEY")
 
 SYMBOLS = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA",
-    "NVDA", "META", "NFLX", "AMD", "INTC",
-    "ORCL", "IBM", "CSCO", "ADBE", "CRM",
-    "PYPL", "UBER", "LYFT", "SHOP", "PLTR",
-    "ZM", "SNAP", "SPOT", "NUE", "KO",
-    "PEP", "MCD", "NKE", "WMT", "DIS",
-    "V", "MA", "JPM", "GS", "BAC",
-    "C", "WFC", "BA", "CAT", "GE",
-    "MMM", "XOM", "CVX", "PFE", "JNJ",
-    "MRK", "ABBV", "T", "F", "GM",
+    "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AGN", "AIG", "ALL", "AMD", "AMGN",
+    "AMZN", "AXP", "BA", "BAC", "BIIB", "BK", "BLK", "BMY", "BRK.B", "C",
+    "CAT", "CELG", "CL", "CMCSA", "COF", "COP", "COST", "CRM", "CSCO", "CVS",
+    "CVX", "DD", "DHR", "DIS", "DOW", "DUK", "EMR", "EXC", "F",
+    "FDX", "FOX", "FOXA", "GD", "GE", "GILD", "GM", "GOOG", "GOOGL", "GS",
+    "HAL", "HD", "HON", "IBM", "INTC", "JNJ", "JPM", "KHC", "KMI", "KO",
+    "LLY", "LMT", "LOW", "LYFT", "MA", "MCD", "MDLZ", "MDT", "MET", "META",
+    "MMM", "MO", "MON", "MRK", "MS", "MSFT", "NEE", "NFLX", "NKE", "NUE",
+    "NVDA", "ORCL", "OXY", "PEP", "PFE", "PG", "PLTR", "PM", "PYPL",
+    "QCOM", "RTN", "SBUX", "SHOP", "SLB", "SNAP", "SO", "SPG", "SPOT", "T",
+    "TGT", "TSLA", "TWX", "TXN", "UBER", "UNH", "UNP", "UPS", "USB", "UTX",
+    "V", "VZ", "WBA", "WFC", "WMT", "XOM", "ZM",
 ]
 
 MARKET_INDICATORS = {
