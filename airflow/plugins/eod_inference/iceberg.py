@@ -326,11 +326,9 @@ def write_pandas_parquet(updates: pd.DataFrame, table_name: str) -> str:
     updates.to_parquet(
         _s3a_to_s3_uri(staging_path),
         index=False,
-        # --- THÊM 3 DÒNG DƯỚI ĐÂY ---
         engine="pyarrow",
         coerce_timestamps="us",
         allow_truncated_timestamps=True,
-        # -----------------------------
         storage_options=_pandas_s3_storage_options(),
     )
     return staging_path

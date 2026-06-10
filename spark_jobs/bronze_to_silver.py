@@ -29,6 +29,8 @@ def build_spark() -> SparkSession:
         .config("spark.executor.memory", "1g")
         .config("spark.executor.cores", "1")
         .config("spark.cores.max", "1")
+        .config("spark.sql.shuffle.partitions", "4")
+        .config("spark.streaming.kafka.maxRatePerPartition", "100")
         .getOrCreate()
     )
 

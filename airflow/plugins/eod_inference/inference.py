@@ -35,6 +35,8 @@ def run_ml_inference(feature_manifest: dict[str, Any]) -> dict[str, Any]:
     # Match the Kaggle notebook: one feature matrix, ordered by model A's
     # training contract, feeds both Model A and Model C.
     x_test_model = features.reindex(columns=expected_features).astype(float)
+    print(f"NaN count in input: {x_test_model.isna().sum().sum()}")
+    print("Batch features sample:\n", x_test_model.iloc[0])
     pred_a = np.asarray(model_a["model"].predict(x_test_model), dtype=float)
     _validate_upside_output(pred_a, "Model A")
 

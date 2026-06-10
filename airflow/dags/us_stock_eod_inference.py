@@ -101,6 +101,9 @@ def _save(**context):
     manifest = context["ti"].xcom_pull(task_ids="run_ml_inference")
     return save_predictions(manifest)
 
+def _is_initial_load() -> bool:
+    value = Variable.get("US_STOCK_INITIAL_LOAD", default_var="false")
+    return str(value).lower() == "true"
 
 with DAG(
     dag_id="us_stock_eod_inference",
@@ -146,4 +149,7 @@ with DAG(
         python_callable=_save,
     )
 
-    extract >> clean >> features >> agent_context >> inference >> save
+    extract >> clean
+
+    if not _is_initial_load():
+        clean >> features >> agent_context >> inference >> save

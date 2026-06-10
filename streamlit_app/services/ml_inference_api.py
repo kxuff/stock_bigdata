@@ -227,6 +227,10 @@ def _prediction_path_for_date(signal_date: date) -> Path | None:
         if parquet_path.exists():
             return parquet_path
 
+    prediction_path = _prediction_path_from_manifest_signal_date(signal_date)
+    if prediction_path is not None:
+        return prediction_path
+
     return None
 
 
@@ -234,6 +238,10 @@ def _prediction_path_from_manifest(path: Path) -> Path | None:
     if not path.exists():
         return None
     payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return _prediction_path_from_manifest_payload(path, payload)
+
+
+def _prediction_path_from_manifest_payload(path: Path, payload: dict[str, Any]) -> Path | None:
     prediction_batch = payload.get("prediction_batch")
     if not prediction_batch:
         return None
@@ -242,6 +250,41 @@ def _prediction_path_from_manifest(path: Path) -> Path | None:
         return candidate
     fallback = _fallback_local_path(candidate)
     return fallback if fallback.exists() else None
+
+
+def _prediction_path_from_manifest_signal_date(signal_date: date) -> Path | None:
+    data_dirs = [_data_dir()]
+    if data_dirs[0] == LOCAL_CONTAINER_DATA_DIR:
+        data_dirs.append(DEFAULT_LOCAL_DATA_DIR)
+
+    for data_dir in data_dirs:
+        manifests = sorted((data_dir / "staging").glob("*/inference_manifest.json"), reverse=True)
+        for manifest in manifests:
+            try:
+                payload: dict[str, Any] = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            if _manifest_signal_date(payload) != signal_date:
+                continue
+
+            prediction_path = _prediction_path_from_manifest_payload(manifest, payload)
+            if prediction_path is not None:
+                return prediction_path
+
+    return None
+
+
+def _manifest_signal_date(payload: dict[str, Any]) -> date | None:
+    for key in ("max_clean_date", "signal_date", "as_of_signal_date"):
+        value = payload.get(key)
+        if not value:
+            continue
+        try:
+            return date.fromisoformat(str(value))
+        except ValueError:
+            continue
+    return None
 
 
 def _fallback_local_path(path: Path) -> Path:

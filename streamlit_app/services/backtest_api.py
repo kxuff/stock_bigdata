@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import sys
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import joblib
-os.environ.setdefault("MPLCONFIGDIR", "/private/tmp/matplotlib")
+os.environ.setdefault("MPLCONFIGDIR", tempfile.gettempdir())
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
