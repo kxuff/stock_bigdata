@@ -158,24 +158,42 @@ def load_symbol_data(symbol: str, is_indicator: bool = False):
                 dt_obj = dt_obj.tz_convert("America/New_York")
                 
             time_key = dt_obj.strftime("%H:%M")
+            dt_str = dt_obj.strftime("%Y-%m-%dT%H:%M:%S%z")
             
-            # Ép thứ tự JSON chuẩn với Spark Schema
-            clean_record = {
-                "Open": float(row.get("Open", 0.0)) if pd.notna(row.get("Open")) else 0.0,
-                "High": float(row.get("High", 0.0)) if pd.notna(row.get("High")) else 0.0,
-                "Low": float(row.get("Low", 0.0)) if pd.notna(row.get("Low")) else 0.0,
-                "Close": float(row.get("Close", 0.0)) if pd.notna(row.get("Close")) else 0.0,
-                "Volume": int(row.get("Volume", 0)) if pd.notna(row.get("Volume")) else 0,
-                "Dividends": float(row.get("Dividends", 0.0)) if pd.notna(row.get("Dividends")) else 0.0,
-                "Stock Splits": float(row.get("Stock Splits", 0.0)) if pd.notna(row.get("Stock Splits")) else 0.0,
-                "Datetime": dt_obj.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            }
-            
+            # Lấy trước các giá trị để code gọn gàng hơn
+            o = float(row.get("Open", 0.0)) if pd.notna(row.get("Open")) else 0.0
+            h = float(row.get("High", 0.0)) if pd.notna(row.get("High")) else 0.0
+            l = float(row.get("Low", 0.0)) if pd.notna(row.get("Low")) else 0.0
+            c = float(row.get("Close", 0.0)) if pd.notna(row.get("Close")) else 0.0
+            v = int(row.get("Volume", 0)) if pd.notna(row.get("Volume")) else 0
+            d = float(row.get("Dividends", 0.0)) if pd.notna(row.get("Dividends")) else 0.0
+            s = float(row.get("Stock Splits", 0.0)) if pd.notna(row.get("Stock Splits")) else 0.0
+
             if is_indicator:
-                clean_record["Indicator"] = symbol
+                clean_record = {
+                    "Open": o,
+                    "High": h,
+                    "Low": l,
+                    "Close": c,
+                    "Volume": v,
+                    "Dividends": d,
+                    "Stock Splits": s,
+                    "Datetime": dt_str,
+                    "Indicator": symbol
+                }
                 indicator_buffer[time_key].append(clean_record)
             else:
-                clean_record["Symbol"] = symbol
+                clean_record = {
+                    "Datetime": dt_str,
+                    "Open": o,
+                    "High": h,
+                    "Low": l,
+                    "Close": c,
+                    "Volume": v,
+                    "Dividends": d,
+                    "Stock Splits": s,
+                    "Symbol": symbol
+                }
                 market_buffer[time_key].append(clean_record)
             
             count += 1
