@@ -94,22 +94,28 @@ manager_synthesis_task:
     of LOW, MEDIUM, HIGH. Do not use synonyms such as CAUTIOUS, POSITIVE,
     NEGATIVE, STRONG_BUY, or ACCUMULATE.
 
-    The summary must be actionable and internally consistent. Start the summary
-    with the exact proposed_recommendation token, followed by the symbol and a
-    short action rationale. Do not use bullish wording as the headline when the
-    proposed_recommendation is HOLD, WATCH, or SELL; positive evidence may only
-    appear as a supporting signal. Include at least two concrete evidence points
-    copied from specialist outputs when available, such as confidence values,
-    ML probability, market stance, valuation label, risk_label, confidence_cap,
-    or named source_refs. Include the main downside risk and one monitor trigger
-    or invalidation condition. If confidence is low, source quality is limited,
-    or human review is likely, say that the action should be reviewed rather
-    than framed as a high-conviction trade.
+    The summary must be actionable, internally consistent, and written like a
+    human advisor explaining the call in paragraphs, not a debug report. Start
+    with the exact proposed_recommendation token and symbol, then explain the
+    practical meaning for the user: whether to buy, hold, wait, reduce, or keep
+    monitoring. Use 2-4 short paragraphs. Avoid raw field names such as
+    market_signal, confidence_cap, predicted_direction, valuation_label,
+    risk_label, revenue_growth_yoy, dividend_yield, source_refs, or exact tool
+    names in the summary unless absolutely necessary. Translate them into plain
+    English: price trend, risk level, valuation support, news tone, and what
+    would change the view. Do not write one-line bullet-style summaries.
+
+    Do not use bullish wording as the headline when the proposed_recommendation
+    is HOLD, WATCH, or SELL; positive evidence may only soften the downside
+    view. Include the main downside risk and one clear monitor trigger or
+    invalidation condition in natural language. If confidence is low, source
+    quality is limited, or human review is likely, say that the action should be
+    reviewed rather than framed as a high-conviction trade.
 
     For risk-focused user queries, emphasize downside risks, warning signs, and
-    risk triggers. Do not return only a generic HOLD/WATCH statement. Include
-    risk_label, confidence_cap, and the most specific risk_factors returned by
-    the risk agent.
+    risk triggers. Do not return only a generic HOLD/WATCH statement. Explain
+    the risk level and specific risk_factors in plain English rather than raw
+    schema labels.
   expected_output: >
     ManagerSynthesisOutput JSON with summary, time_horizon,
     proposed_recommendation or portfolio draft, decision_rationale,
@@ -117,5 +123,5 @@ manager_synthesis_task:
     data_citations. The summary must not contradict proposed_recommendation,
     time_horizon, risk_warnings, or confidence limitations. Return only valid
     JSON with no markdown fences. Example:
-    {"summary":"HOLD AAPL: action is to maintain exposure, not add aggressively, because market_signal is BULLISH with confidence=0.66 but valuation_label is FAIRLY_VALUED and risk_label is MEDIUM. Main downside risk is technology concentration; monitor for risk_prob or confidence_cap deterioration before upgrading to BUY.","time_horizon":"SHORT_TERM","proposed_recommendation":"HOLD","decision_rationale":[{"factor":"market_signal","stance":"BULLISH","weight":"MEDIUM","explanation":"Technical and ML signals are mildly positive, but not enough to override valuation/risk limits."}],"supporting_signals":["ML probability is modestly positive"],"conflicting_signals":["Valuation upside is limited"],"risk_warnings":["Technology concentration can increase volatility."],"limitations":[],"data_citations":["postgresql.real_time_prices:AAPL"]}
+    {"summary":"HOLD AAPL: maintain the position rather than adding aggressively. Price and model signals are mildly positive, but the setup is not strong enough to ignore valuation and risk limits. The practical takeaway is to keep exposure if already owned, but wait for a cleaner entry before increasing size.\n\nThe main risk is that volatility can rise if the current momentum fades. A better setup would need price strength to continue with improving volume and no deterioration in the risk snapshot.","time_horizon":"SHORT_TERM","proposed_recommendation":"HOLD","decision_rationale":[{"factor":"market_signal","stance":"BULLISH","weight":"MEDIUM","explanation":"Technical and ML signals are mildly positive, but not enough to override valuation/risk limits."}],"supporting_signals":["ML probability is modestly positive"],"conflicting_signals":["Valuation upside is limited"],"risk_warnings":["Technology concentration can increase volatility."],"limitations":[],"data_citations":["postgresql.real_time_prices:AAPL"]}
   agent: manager_agent

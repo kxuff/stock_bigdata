@@ -56,6 +56,7 @@ class AgentRoute(StrEnum):
     WATCHLIST_REVIEW = "watchlist_review"
     UNIVERSE_SCREEN = "universe_screen"
     MARKET_BRIEF = "market_brief"
+    TOP_STOCKS = "top_stocks"
     PORTFOLIO_REBALANCE = "portfolio_rebalance"
     BACKTEST_ANALYSIS = "backtest_analysis"
     DATA_DIAGNOSTICS = "data_diagnostics"

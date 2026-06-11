@@ -60,6 +60,10 @@ class AutonomousAgentService:
             if self.route_crew_runner is not None:
                 return self.route_crew_runner.run(request, routed)
             return self.route_services.market_brief(routed)
+        if routed.route == AgentRoute.TOP_STOCKS:
+            if self.route_crew_runner is not None:
+                return self.route_crew_runner.run(request, routed)
+            return self.route_services.top_stocks(request, routed)
         if routed.route == AgentRoute.DATA_DIAGNOSTICS:
             if self.route_crew_runner is not None:
                 return self.route_crew_runner.run(request, routed)

@@ -61,8 +61,8 @@ class RouteCrewRunner:
             }
         )
         payload = _parse_payload(_extract_task_payload(task) or raw)
-        if route.route == AgentRoute.MARKET_BRIEF:
-            payload = self._ground_market_brief_payload(payload, request)
+        if route.route in {AgentRoute.MARKET_BRIEF, AgentRoute.TOP_STOCKS}:
+            payload = self._ground_market_screen_payload(payload, request, route.route)
         return AgentQueryResponse(
             route=route.route,
             status="immediate",
@@ -75,15 +75,71 @@ class RouteCrewRunner:
         )
 
     def _ground_market_brief_payload(self, payload: RouteAgentResponseOutput, request: AgentQueryRequest) -> RouteAgentResponseOutput:
+        return self._ground_market_screen_payload(payload, request, AgentRoute.MARKET_BRIEF)
+
+    def _ground_market_screen_payload(self, payload: RouteAgentResponseOutput, request: AgentQueryRequest, route: AgentRoute) -> RouteAgentResponseOutput:
         """Keep agent prose, but force structured market data to come from tool/provider."""
-        limit = _market_brief_limit(request.message)
-        leaders = json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
-        payload.result_type = "market_brief"
+        default = 5 if route == AgentRoute.MARKET_BRIEF else 10
+        limit = _market_screen_limit(request.message, default=default)
+        rows = json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
+        payload.result_type = "market_brief" if route == AgentRoute.MARKET_BRIEF else "top_stocks"
         result = dict(payload.result or {})
-        result["leaders"] = leaders
+        if route == AgentRoute.MARKET_BRIEF:
+            result["leaders"] = rows
+        else:
+            result["stocks"] = rows
         payload.result = result
-        payload.message = _ground_market_brief_message(payload.message, leaders)
+        try:
+            _validate_agent_market_message(payload.message, rows)
+        except ValueError:
+            payload.message = self._repair_market_message(payload.message, request, route, result)
+            _validate_agent_market_message(payload.message, rows, check_symbols=False)
         return payload
+
+    def _repair_market_message(self, message: str, request: AgentQueryRequest, route: AgentRoute, result: dict[str, Any]) -> str:
+        import litellm
+
+        rows_key = "leaders" if route == AgentRoute.MARKET_BRIEF else "stocks"
+        rows = result.get(rows_key) or []
+        allowed_symbols = [_row_symbol(row) for row in rows if _row_symbol(row)]
+        response = litellm.completion(
+            model=self.settings.llm_model,
+            api_key=self.settings.llm_api_key.get_secret_value() if self.settings.llm_api_key else None,
+            api_base=self.settings.llm_base_url,
+            temperature=self.settings.agent_temperature,
+            timeout=min(self.settings.agent_timeout_seconds, 30),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the assistant market response using only the grounded JSON rows and optional news/sentiment fields. "
+                        "Do not invent symbols, prices, news, dates, or metrics. Do not mention raw dates, as_of, Datetime, or freshness timestamps. "
+                        "Mention only ticker symbols from the allowed_symbols list. "
+                        "Write natural language for a human investor, not a quant dashboard. Avoid raw field names such as final_score, risk_prob, RSI14, RVOL20, pred_a, r1/r3/r5. "
+                        "Convert 0..1 scores into /100 only when useful, and explain signals as plain meaning: low model risk, not overbought, weak volume confirmation, bullish/bearish news tone. "
+                        "Do not add financial-advice disclaimers. Avoid vague labels like 'hot themes' or 'main read'; use plain labels like Market tone, Recent news, and What to watch. "
+                        "Explain like the reader is not a finance professional. Avoid unexplained jargon such as capex, semis, infra, follow-through, overheating, tape, breadth, breakout, or crowded. If a term is necessary, explain it in the same sentence. "
+                        "Every bullet or sentence must answer at least one of: what it means, which stock/group it affects, why it matters, or what to watch next. Do not output bare theme phrases like 'AI demand', 'cloud growth', 'chip demand', or 'earnings momentum' without explaining impact. "
+                        "Use 3-4 clear sections for market briefs: Market tone, Leaders, Recent news, and What to watch. Each section should have 2-4 concise sentences. For ranked top-stocks lists, use 1-2 concise sentences per stock. Return plain text only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "user_query": request.message,
+                            "route": route.value,
+                            "invalid_message": message,
+                            "allowed_symbols": allowed_symbols,
+                            rows_key: rows,
+                            "result": {k: v for k, v in result.items() if k != rows_key},
+                        },
+                        default=str,
+                    ),
+                },
+            ],
+        )
+        return str(response["choices"][0]["message"]["content"]).strip()
 
     def _tools(self) -> list[BaseTool]:
         tools: list[BaseTool] = [
@@ -154,6 +210,7 @@ def _task_name(route: AgentRoute) -> str:
         AgentRoute.WATCHLIST_REVIEW: "route_watchlist_review_task",
         AgentRoute.UNIVERSE_SCREEN: "route_universe_screen_task",
         AgentRoute.MARKET_BRIEF: "route_market_brief_task",
+        AgentRoute.TOP_STOCKS: "route_top_stocks_task",
         AgentRoute.DATA_DIAGNOSTICS: "route_data_diagnostics_task",
         AgentRoute.STREAMING_FRESHNESS_CHECK: "route_streaming_freshness_task",
     }.get(route, "route_market_brief_task")
@@ -181,6 +238,10 @@ def _parse_payload(payload: Any) -> RouteAgentResponseOutput:
 
 
 def _market_brief_limit(message: str) -> int:
+    return _market_screen_limit(message, default=5)
+
+
+def _market_screen_limit(message: str, default: int = 5) -> int:
     text = str(message).lower()
     word_numbers = {
         "one": 1,
@@ -210,20 +271,18 @@ def _market_brief_limit(message: str) -> int:
     for word, value in word_numbers.items():
         if re.search(rf"\b(?:top\s*)?{word}\s*(?:stocks?|names?|tickers?)\b", text):
             return value
-    return 5
+    return default
 
 
-def _ground_market_brief_message(message: str, leaders: list[dict[str, Any]]) -> str:
+def _validate_agent_market_message(message: str, leaders: list[dict[str, Any]], *, check_symbols: bool = True) -> None:
     if not leaders:
-        return message
-    if not _message_matches_leaders(message, leaders):
-        message = _fallback_market_brief_message(leaders)
-    latest = _latest_as_of(leaders)
-    if latest:
-        message = re.sub(r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:Z)?)?\b", latest, message)
-    if "Not financial advice." not in message:
-        message = message.rstrip().rstrip(".") + ". Not financial advice."
-    return message
+        return
+    if check_symbols and not _message_matches_leaders(message, leaders):
+        raise ValueError("agent market message mentions symbols outside grounded tool rows")
+    if _contains_user_facing_date(message):
+        raise ValueError("agent market message contains raw dates/freshness fields")
+    if "Not financial advice" in message:
+        raise ValueError("agent market message contains removed disclaimer")
 
 
 def _message_matches_leaders(message: str, leaders: list[dict[str, Any]]) -> bool:
@@ -232,39 +291,17 @@ def _message_matches_leaders(message: str, leaders: list[dict[str, Any]]) -> boo
     if not leader_symbols:
         return True
     mentioned = set(re.findall(r"\b[A-Z]{2,5}\b", message))
-    ignored = {"ORCA", "RSI", "RSI14", "RVOL", "RVOL20"}
+    ignored = {
+        "ORCA", "RSI", "RSI14", "RVOL", "RVOL20",
+        "AI", "API", "CEO", "CFO", "EPS", "ETF", "GDP", "CPI", "FOMC",
+        "US", "USA", "USD", "MBR", "S3", "SQL", "LLM",
+    }
     mentioned -= ignored
-    return not mentioned or bool(mentioned & leader_symbols)
+    return not mentioned or mentioned.issubset(leader_symbols)
 
 
-def _fallback_market_brief_message(leaders: list[dict[str, Any]]) -> str:
-    top = leaders[:5]
-    names = ", ".join(_row_symbol(row) for row in top if _row_symbol(row))
-    lead = top[0]
-    lead_symbol = _row_symbol(lead)
-    lead_score = _row_number(lead, "final_score")
-    lead_price = _row_number(lead, "latest_price", "price", "entry_price")
-    message = f"Top stocks to watch now: {names}."
-    if lead_symbol and lead_score is not None:
-        message += f" {lead_symbol} leads with ORCA score {lead_score:.2f}"
-        if lead_price is not None:
-            message += f" at {lead_price:.2f}"
-        message += "."
-    risk_notes = []
-    for row in leaders:
-        symbol = _row_symbol(row)
-        rsi = _row_number(row, "RSI14")
-        risk = _row_number(row, "risk_prob")
-        if symbol and rsi is not None and rsi >= 70:
-            risk_notes.append(f"{symbol} RSI14 {rsi:.1f}")
-        elif symbol and risk is not None and risk >= 0.30:
-            risk_notes.append(f"{symbol} risk_prob {risk:.2f}")
-    if risk_notes:
-        message += " Risk flags: " + "; ".join(risk_notes[:2]) + "."
-    latest = _latest_as_of(leaders)
-    if latest:
-        message += f" Latest data as_of {latest}."
-    return message
+def _contains_user_facing_date(message: str) -> bool:
+    return bool(re.search(r"\b(?:as_of|Datetime|latest as_of|as of)\b|\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:Z)?)?\b", message, flags=re.IGNORECASE))
 
 
 def _row_symbol(row: dict[str, Any]) -> str:

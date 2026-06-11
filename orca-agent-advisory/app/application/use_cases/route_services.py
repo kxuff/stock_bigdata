@@ -8,7 +8,7 @@ from app.application.ports.portfolio_provider import PortfolioProvider
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse, RoutedAgentQuery, SuggestedAction
 from app.schemas.enums import AgentRoute
 from app.schemas.portfolio import PortfolioAccountSnapshot
-from app.schemas.route_results import BacktestAnalysisResult, ComparisonRow, DataDiagnosticsResult, MarketBriefResult, PortfolioRebalanceChange, PortfolioRebalanceResult, ScreenCandidate, SymbolComparisonResult, UniverseScreenResult, WatchlistItem, WatchlistReviewResult
+from app.schemas.route_results import BacktestAnalysisResult, ComparisonRow, DataDiagnosticsResult, MarketBriefResult, PortfolioRebalanceChange, PortfolioRebalanceResult, ScreenCandidate, SymbolComparisonResult, TopStocksResult, UniverseScreenResult, WatchlistItem, WatchlistReviewResult
 
 
 @dataclass
@@ -34,6 +34,13 @@ class AgentRouteServices:
         leaders = [_screen_candidate(row) for row in self.market_screen_provider.screen_latest(5)]
         result = MarketBriefResult(summary="Latest ORCA prediction leaders loaded from prediction table.", leaders=leaders)
         return _response(route, "market_brief", result.model_dump())
+
+    def top_stocks(self, request: AgentQueryRequest, route: RoutedAgentQuery) -> AgentQueryResponse:
+        stocks = [_screen_candidate(row) for row in self.market_screen_provider.screen_latest(_requested_count(request.message))]
+        result = TopStocksResult(stocks=stocks)
+        response = _response(route, "top_stocks", result.model_dump())
+        response.message = "Top ORCA-ranked stocks loaded."
+        return response
 
     def data_diagnostics(self, route: RoutedAgentQuery) -> AgentQueryResponse:
         result = DataDiagnosticsResult(diagnostics=self.market_screen_provider.diagnose())
@@ -127,6 +134,16 @@ class AgentRouteServices:
 
 def _response(route: RoutedAgentQuery, result_type: str, result: dict[str, Any]) -> AgentQueryResponse:
     return AgentQueryResponse(route=route.route, status="immediate", message=route.message, symbols=route.symbols, result_type=result_type, result=result, suggested_actions=route.suggested_actions or [SuggestedAction(label="Ask for single-symbol advisory", route=AgentRoute.SINGLE_SYMBOL_ADVISORY)], router_confidence=route.confidence)
+
+
+def _requested_count(message: str, default: int = 10) -> int:
+    import re
+
+    text = str(message).lower()
+    match = re.search(r"\b(?:top\s*)?(\d{1,2})\s*(?:stocks?|names?|tickers?)\b", text)
+    if match:
+        return max(1, min(int(match.group(1)), 20))
+    return default
 
 
 def _screen_candidate(row: dict[str, Any]) -> ScreenCandidate:

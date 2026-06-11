@@ -22,7 +22,7 @@ route_watchlist_review_task:
     RouteAgentResponseOutput JSON with message, result_type="watchlist_review",
     result containing items, source_refs, and limitations. Message must include
     ranking rationale using final_score/risk_prob/RSI14/RVOL20/latest_price/as_of,
-    not just raw metrics. Include "Not financial advice." Return JSON only.
+    not just raw metrics. Return JSON only.
   agent: route_response_agent
 
 route_universe_screen_task:
@@ -36,7 +36,7 @@ route_universe_screen_task:
     RouteAgentResponseOutput JSON with message, result_type="universe_screen",
     result containing candidates, source_refs, and limitations. Message must
     state top candidate, weakest candidate, key risk flags, and next action.
-    Include "Not financial advice." Return JSON only.
+    Return JSON only.
   agent: route_response_agent
 
 route_market_brief_task:
@@ -46,18 +46,54 @@ route_market_brief_task:
     if they ask for a specific count (for example top 10, 10 stocks, ten names),
     call MarketScreenTool with that count; otherwise use 5. Keep tool input
     reasonable for chat responses (1 to 20). Summarize current ORCA market
-    leaders and risk flags from tool data only. Write the message like a
-    concise market desk note for humans, not a raw metrics dump: lead with 1
-    sentence naming the best watchlist ideas, then 1 short risk sentence.
-    Mention only the most useful evidence (score, price, RSI/RVOL/risk when
-    notable) and avoid listing every field for every stock. If tool as_of dates
-    are not current, explicitly warn that data is stale and name the latest
-    as_of date.
+    leaders, risks, and news themes from tool data only. Write for a normal
+    investor, not a quant dashboard. Avoid raw field names such as final_score,
+    risk_prob, RSI14, RVOL20, pred_a, r1/r3/r5. Convert scores on a 0..1 scale
+    into plain language or /100 only when useful. Explain what signals mean:
+    "low model risk", "not overbought", "volume confirmation is weak", etc.
+    Use 3-4 clear sections with labels: "Market tone", "Leaders", "Recent news",
+    and "What to watch". Write enough detail for a user to understand the why,
+    not just the conclusion. Each section should have 2-4 concise sentences.
+    Do not use vague labels like "hot themes" or "main read".
+    Explain like the reader is not a finance professional. Avoid unexplained jargon
+    such as capex, semis, infra, follow-through, overheating, tape, breadth,
+    breakout, or crowded. If a term is necessary, explain it in the same sentence.
+    Every bullet or sentence must answer at least one of: what it means, which
+    stock/group it affects, why it matters, or what to watch next. Do not output
+    bare theme phrases like "AI demand", "cloud growth", "chip demand", or
+    "earnings momentum" without explaining impact.
+    For the leaders section, discuss the top 3-5 names and explain what makes
+    each one different in plain English. Do not include raw freshness fields or
+    dates such as as_of/Datetime in the user-facing message; if freshness
+    matters, describe it in natural language without a timestamp. Include hot
+    recent news themes when tool data includes top_drivers or sentiment fields.
   expected_output: >
     RouteAgentResponseOutput JSON with message, result_type="market_brief",
-    result containing leaders, source_refs, and limitations. The message MUST
-    end with exactly this final sentence: "Not financial advice." Return JSON
-    only.
+    result containing leaders plus optional highlights, risk_flags, hot_news,
+    watch_next, source_refs, and limitations. Return JSON only.
+  agent: route_response_agent
+
+route_top_stocks_task:
+  description: >
+    User query: {user_query}. Interpret the user's requested ranked top-stocks
+    list from this exact query. Choose the MarketScreenTool input from the
+    user's requested count (for example top 10, 10 stocks, ten names); otherwise
+    use 10. Keep tool input reasonable for chat responses (1 to 20). Use only
+    tool data. Write a concise ranked list in natural language. Avoid raw field
+    names such as final_score, risk_prob, RSI14, RVOL20, pred_a, r1/r3/r5.
+    Convert scores on a 0..1 scale into /100 only when useful. Explain why each
+    name is interesting in plain English using price action, risk, sentiment,
+    and recent news. Use 1-2 concise sentences per ranked stock, not terse
+    fragments. Do not use vague labels like "hot themes" or "main read".
+    Avoid unexplained jargon such as capex, semis, infra, follow-through,
+    overheating, tape, breadth, breakout, or crowded. If a term is necessary,
+    explain it immediately. Do not output bare theme phrases like "AI demand" or
+    "cloud growth" without explaining what they mean for the stocks.
+    Do not include raw freshness fields or dates such as
+    as_of/Datetime in the user-facing message.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message, result_type="top_stocks",
+    result containing stocks, source_refs, and limitations. Return JSON only.
   agent: route_response_agent
 
 route_data_diagnostics_task:

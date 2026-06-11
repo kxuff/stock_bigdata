@@ -76,6 +76,16 @@ class MarketBriefResult(BaseModel):
 
     summary: str
     leaders: list[ScreenCandidate] = Field(default_factory=list)
+    highlights: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    hot_news: list[str] = Field(default_factory=list)
+    watch_next: list[str] = Field(default_factory=list)
+
+
+class TopStocksResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stocks: list[ScreenCandidate] = Field(default_factory=list)
 
 
 class DataDiagnosticsResult(BaseModel):

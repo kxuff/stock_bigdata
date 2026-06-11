@@ -81,24 +81,26 @@ def render_decision(decision: dict) -> None:
     if decision.get("requires_human_review"):
         st.warning("⚠️ Human review required before any action.")
 
-    # Summary
+    # Summary / advisor note
     summary = decision.get("summary", "")
     if summary:
+        st.markdown("**Advisor note**")
         st.info(f"💬 {summary}")
 
-    # Signals side by side
+    # Signals / detailed evidence. Keep user-facing answer prose-first; details collapsed.
     supporting = decision.get("supporting_signals") or decision.get("supporting_evidence") or []
     conflicting = decision.get("conflicting_signals") or decision.get("conflicts") or []
     if supporting or conflicting:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown("**✦ Supporting signals**")
-            for s in supporting[:5]:
-                st.markdown(f"<div style='color:#6ee7b7;font-size:0.85rem;margin:.15rem 0'>✦ {s}</div>", unsafe_allow_html=True)
-        with col_b:
-            st.markdown("**✕ Conflicting signals**")
-            for s in conflicting[:5]:
-                st.markdown(f"<div style='color:#fda4af;font-size:0.85rem;margin:.15rem 0'>✕ {s}</div>", unsafe_allow_html=True)
+        with st.expander("Why this recommendation", expanded=False):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("**What supports the call**")
+                for s in supporting[:5]:
+                    st.markdown(f"<div style='color:#6ee7b7;font-size:0.85rem;margin:.15rem 0'>• {s}</div>", unsafe_allow_html=True)
+            with col_b:
+                st.markdown("**What could change the view**")
+                for s in conflicting[:5]:
+                    st.markdown(f"<div style='color:#fda4af;font-size:0.85rem;margin:.15rem 0'>• {s}</div>", unsafe_allow_html=True)
 
     # Rationale table
     rationale = [r for r in (decision.get("decision_rationale") or []) if isinstance(r, dict)]
@@ -114,22 +116,23 @@ def render_decision(decision: dict) -> None:
     # Risk warnings
     warnings = decision.get("risk_warnings") or []
     if warnings:
-        with st.expander("⚠️ Risk warnings", expanded=True):
+        with st.expander("⚠️ Risk warnings", expanded=False):
             for w in warnings:
                 st.markdown(f"<div style='color:#fda4af;font-size:0.85rem;margin:.15rem 0'>• {w}</div>", unsafe_allow_html=True)
 
     # Source quality + audit
     sq = decision.get("source_quality") or {}
     if sq:
-        cols = st.columns(4)
-        for col, (label, key) in zip(cols, [
-            ("Overall", "overall_quality_score"),
-            ("Freshness", "freshness_score"),
-            ("Relevance", "relevance_score"),
-            ("Complete", "completeness_score"),
-        ]):
-            v = sq.get(key)
-            col.metric(label, f"{float(v):.0%}" if v is not None else "—")
+        with st.expander("Data quality", expanded=False):
+            cols = st.columns(4)
+            for col, (label, key) in zip(cols, [
+                ("Overall", "overall_quality_score"),
+                ("Freshness", "freshness_score"),
+                ("Relevance", "relevance_score"),
+                ("Complete", "completeness_score"),
+            ]):
+                v = sq.get(key)
+                col.metric(label, f"{float(v):.0%}" if v is not None else "—")
 
     # Tool audit
     tool_audit = decision.get("retrieved_tool_audit") or {}
@@ -172,7 +175,7 @@ def render_agent_response(response: dict) -> None:
 
     _STRUCTURED = {
         "symbol_comparison", "universe_screen", "watchlist_review",
-        "market_brief", "data_diagnostics", "portfolio_rebalance",
+        "market_brief", "top_stocks", "data_diagnostics", "portfolio_rebalance",
         "backtest_analysis", "streaming_pipeline_health",
         "streaming_freshness_check", "streaming_alert_review",
         "streaming_symbol_monitor", "streaming_feature_drift",
@@ -218,16 +221,19 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
         "universe_screen":   "candidates",
         "watchlist_review":  "items",
         "market_brief":      "leaders",
+        "top_stocks":        "stocks",
     }.get(result_type)
 
     if rows_key is not None:
         if result_type == "market_brief" and result.get("summary"):
             st.info(f"📈 {result['summary']}")
+        if result_type == "market_brief":
+            _render_market_brief_sections(result)
         rows = result.get(rows_key) or []
         if rows:
             _rows_header(rows)
             _warn_expander(rows)
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.dataframe(_display_rows(result_type, rows), use_container_width=True, hide_index=True)
         else:
             render_empty(f"No {result_type.replace('_', ' ')} data returned.")
         if result_type == "universe_screen":
@@ -236,6 +242,60 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
                 with st.expander("🔍 Diagnostics"):
                     st.json(diagnostics)
         return
+
+
+def _render_market_brief_sections(result: dict) -> None:
+    sections = [
+        ("Highlights", "highlights"),
+        ("Hot news", "hot_news"),
+        ("Risk flags", "risk_flags"),
+        ("Watch next", "watch_next"),
+    ]
+    for title, key in sections:
+        items = result.get(key) or []
+        if not items:
+            continue
+        st.markdown(f"**{title}**")
+        for item in items[:6]:
+            st.markdown(f"› {item}")
+
+
+def _display_rows(result_type: str, rows: list) -> list:
+    if result_type not in {"market_brief", "top_stocks"}:
+        return rows
+    cols = ["symbol", "Symbol", "final_score", "latest_price", "price", "RSI14", "RVOL20", "risk_prob"]
+    labels = {
+        "symbol": "Symbol",
+        "Symbol": "Symbol",
+        "final_score": "ORCA Score",
+        "latest_price": "Price",
+        "price": "Price",
+        "RSI14": "RSI14",
+        "RVOL20": "RVOL20",
+        "risk_prob": "Risk Prob",
+    }
+    display = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = {}
+        for col in cols:
+            if col in row and row[col] is not None:
+                item[labels[col]] = _fmt_cell(col, row[col])
+        display.append(item)
+    return display or rows
+
+
+def _fmt_cell(col: str, value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return value
+    if col == "final_score" and numeric <= 1:
+        return round(numeric * 100, 1)
+    if col in {"final_score", "latest_price", "price", "RSI14", "RVOL20", "risk_prob"}:
+        return round(numeric, 2)
+    return value
 
     if result_type == "data_diagnostics":
         st.json(result.get("diagnostics") or result)

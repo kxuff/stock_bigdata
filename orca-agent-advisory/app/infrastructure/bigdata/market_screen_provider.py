@@ -55,7 +55,7 @@ class BigdataMarketScreenProvider:
             return []
 
     def _enrich(self, spark, df):
-        """Enrich predictions with latest_price and technical indicators (best-effort)."""
+        """Enrich predictions with price, technicals, and news sentiment (best-effort)."""
         from pyspark.sql import Window, functions as F  # type: ignore[import-not-found]
 
         # ── 1. latest_price from curated EOD prices ──────────────────────────
@@ -89,6 +89,36 @@ class BigdataMarketScreenProvider:
                 )
                 df = df.join(latest_feat, on="Symbol", how="left")
         except Exception:  # noqa: BLE001 - market_features table may not exist yet
+            pass
+
+        # ── 3. News/sentiment context from ml_ready.stock_sentiment_context ──
+        try:
+            sentiment_tbl = self.table_config.table_ref(self.table_config.sentiment_table)
+            sentiment = spark.table(sentiment_tbl)
+            sentiment_cols = [
+                c
+                for c in (
+                    "sentiment_label",
+                    "sentiment_score",
+                    "article_count",
+                    "latest_article_published_at",
+                    "stale_article_count",
+                    "top_drivers",
+                    "source_refs",
+                )
+                if c in sentiment.columns
+            ]
+            if sentiment_cols:
+                order_col = "as_of_date" if "as_of_date" in sentiment.columns else "process_date"
+                w_s = Window.partitionBy("Symbol").orderBy(F.col(order_col).desc_nulls_last())
+                latest_sentiment = (
+                    sentiment.select("Symbol", order_col, *sentiment_cols)
+                    .withColumn("_rn", F.row_number().over(w_s))
+                    .where(F.col("_rn") == 1)
+                    .drop("_rn", order_col)
+                )
+                df = df.join(latest_sentiment, on="Symbol", how="left")
+        except Exception:  # noqa: BLE001 - sentiment context may not exist yet
             pass
 
         return df
