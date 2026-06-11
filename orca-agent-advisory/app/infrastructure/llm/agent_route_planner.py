@@ -32,6 +32,8 @@ class LiteLLMAgentRoutePlanner:
                         "Use out_of_scope for non-market requests. Return JSON only matching schema. "
                         "If the user asks to analyze one ticker and asks for investment view, risks, or confidence, choose single_symbol_advisory even if the ticker is also an English word such as ALL or C. "
                         "If the user asks for downside risk, warning signs, or risk assessment for one ticker, choose single_symbol_advisory. "
+                        "If the user asks for stocks/names to watch right now, top stocks to watch, market leaders, or a broad market brief, choose market_brief even when they specify a count such as 10 stocks. "
+                        "Use universe_screen only when the user explicitly asks to screen/filter a universe with criteria, not for a conversational watchlist brief. "
                         "Do not route a one-symbol analyze request to market_brief."
                     ),
                 },

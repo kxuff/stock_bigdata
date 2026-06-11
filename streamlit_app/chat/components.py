@@ -52,8 +52,8 @@ def kicker(label: str) -> None:
 
 
 def route_tag(route: str, confidence: float | None = None) -> str:
-    conf_part = f" · {confidence:.2f}" if confidence is not None else ""
-    return f'<span class="route-tag">{route}{conf_part}</span>'
+    label = str(route).replace("_", " ").title()
+    return f'<span class="route-tag">{label}</span>'
 
 
 # ── Decision card ─────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ from pyspark.sql.types import (
 
 CATALOG = os.getenv("ICEBERG_CATALOG", "nessie")
 CHECKPOINT_BASE = os.getenv("ALERT_CHECKPOINT_BASE", "s3a://alert/checkpoints/silver_to_alerts")
-SILVER_MARKET_TABLE = os.getenv("SILVER_MARKET_TABLE", f"{CATALOG}.silver.stock_market")
+SILVER_MARKET_TABLE = os.getenv("SILVER_MARKET_TABLE", f"{CATALOG}.silver.stock_market_v2")
 ALERT_TABLE = os.getenv("ALERT_TABLE", f"{CATALOG}.alert.stock_market_alerts")
 ALERT_LOCATION = os.getenv("ALERT_LOCATION", "s3a://alert/stock_market_alerts")
 

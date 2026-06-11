@@ -1,0 +1,84 @@
+route_symbol_comparison_task:
+  description: >
+    User query: {user_query}. Symbols: {symbols}. Call SymbolLoadTool with
+    {symbols}. Rank requested symbols by final_score and explain strongest and
+    weakest using returned metrics only. Include final_score, latest_price,
+    RSI14, RVOL20, risk_prob, as_of, and warnings where available. Do not use
+    external data. If a symbol is missing, state it as a limitation.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message, result_type="symbol_comparison",
+    result containing rows, source_refs, and limitations. The message must be
+    under 180 words, cite concrete fields, be actionable, and include "Not
+    financial advice." Return JSON only with no markdown fences.
+  agent: route_response_agent
+
+route_watchlist_review_task:
+  description: >
+    User query: {user_query}. Watchlist symbols: {symbols}. Call SymbolLoadTool
+    with {symbols}. Produce a ranked watchlist review from returned ORCA
+    signals. Identify top names, weakest names, elevated-risk names, and what
+    to monitor next. Use only tool fields.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message, result_type="watchlist_review",
+    result containing items, source_refs, and limitations. Message must include
+    ranking rationale using final_score/risk_prob/RSI14/RVOL20/latest_price/as_of,
+    not just raw metrics. Include "Not financial advice." Return JSON only.
+  agent: route_response_agent
+
+route_universe_screen_task:
+  description: >
+    User query: {user_query}. Requested symbols: {symbols}. If symbols are
+    provided, call SymbolLoadTool with {symbols}; otherwise call MarketScreenTool
+    with 10. Rank strongest and weakest candidates using final_score and risk
+    evidence. Never answer with clarification when symbols or a universe are
+    available.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message, result_type="universe_screen",
+    result containing candidates, source_refs, and limitations. Message must
+    state top candidate, weakest candidate, key risk flags, and next action.
+    Include "Not financial advice." Return JSON only.
+  agent: route_response_agent
+
+route_market_brief_task:
+  description: >
+    User query: {user_query}. Interpret the user's requested market brief from
+    this exact query. Choose the MarketScreenTool input from the user's intent:
+    if they ask for a specific count (for example top 10, 10 stocks, ten names),
+    call MarketScreenTool with that count; otherwise use 5. Keep tool input
+    reasonable for chat responses (1 to 20). Summarize current ORCA market
+    leaders and risk flags from tool data only. Write the message like a
+    concise market desk note for humans, not a raw metrics dump: lead with 1
+    sentence naming the best watchlist ideas, then 1 short risk sentence.
+    Mention only the most useful evidence (score, price, RSI/RVOL/risk when
+    notable) and avoid listing every field for every stock. If tool as_of dates
+    are not current, explicitly warn that data is stale and name the latest
+    as_of date.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message, result_type="market_brief",
+    result containing leaders, source_refs, and limitations. The message MUST
+    end with exactly this final sentence: "Not financial advice." Return JSON
+    only.
+  agent: route_response_agent
+
+route_data_diagnostics_task:
+  description: >
+    User query: {user_query}. Call MarketDiagnosticsTool. Explain data source
+    status, row counts, table errors, and next action. Do not hide errors.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message, result_type="data_diagnostics",
+    result containing diagnostics, source_refs, and limitations. Include status
+    and next action. Return JSON only.
+  agent: route_response_agent
+
+route_streaming_freshness_task:
+  description: >
+    User query: {user_query}. Symbols: {symbols}. Call FreshnessTool with
+    {symbols}. Summarize per-symbol and per-table freshness, latest timestamps,
+    lag, stale/error rows, and next action. If the tool reports table metadata
+    errors, explain them clearly.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message,
+    result_type="streaming_freshness_check", result containing rows,
+    source_refs, and limitations. Message must include per-symbol/table status
+    evidence rather than a generic diagnostic phrase. Return JSON only.
+  agent: route_response_agent

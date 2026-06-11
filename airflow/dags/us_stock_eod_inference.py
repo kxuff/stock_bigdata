@@ -149,7 +149,4 @@ with DAG(
         python_callable=_save,
     )
 
-    extract >> clean
-
-    if not _is_initial_load():
-        clean >> features >> agent_context >> inference >> save
+    extract >> clean >> features >> agent_context >> inference >> save

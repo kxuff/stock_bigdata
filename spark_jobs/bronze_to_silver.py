@@ -39,7 +39,7 @@ def ensure_tables(spark: SparkSession) -> None:
     spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.silver")
     spark.sql(
         f"""
-        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_market (
+        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_market_v2 (
             Datetime timestamp,
             Symbol string,
             Open double,
@@ -56,13 +56,13 @@ def ensure_tables(spark: SparkSession) -> None:
         )
         USING iceberg
         PARTITIONED BY (days(Datetime), Symbol)
-        LOCATION 's3a://silver/stock_market'
+        LOCATION 's3a://silver/stock_market_v2'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
     spark.sql(
         f"""
-        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_market_indicator (
+        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_market_indicator_v2 (
             Datetime timestamp,
             Indicator string,
             Open double,
@@ -79,13 +79,13 @@ def ensure_tables(spark: SparkSession) -> None:
         )
         USING iceberg
         PARTITIONED BY (days(Datetime), Indicator)
-        LOCATION 's3a://silver/stock_market_indicator'
+        LOCATION 's3a://silver/stock_market_indicator_v2'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
     spark.sql(
         f"""
-        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_news_v3 (
+        CREATE TABLE IF NOT EXISTS {CATALOG}.silver.stock_news_v4 (
             Datetime timestamp,
             Symbol string,
             id long,
@@ -99,7 +99,7 @@ def ensure_tables(spark: SparkSession) -> None:
         )
         USING iceberg
         PARTITIONED BY (days(Datetime), Symbol)
-        LOCATION 's3a://silver/stock_news_v3'
+        LOCATION 's3a://silver/stock_news_v4'
         TBLPROPERTIES ('write.format.default'='parquet')
         """
     )
@@ -270,20 +270,20 @@ if __name__ == "__main__":
         queries.extend([
             write_iceberg_stream(
                 market_silver_stream(spark),
-                f"{CATALOG}.silver.stock_market",
-                f"{CHECKPOINT_BASE}/stock_market",
+                f"{CATALOG}.silver.stock_market_v2",
+                f"{CHECKPOINT_BASE}/stock_market_v2",
                 "stock_market"
             ),
             write_iceberg_stream(
                 market_indicator_silver_stream(spark),
-                f"{CATALOG}.silver.stock_market_indicator",
-                f"{CHECKPOINT_BASE}/stock_market_indicator",
+                f"{CATALOG}.silver.stock_market_indicator_v2",
+                f"{CHECKPOINT_BASE}/stock_market_indicator_v2",
                 "stock_market_indicator"
             ),
             write_iceberg_stream(
                 news_silver_stream(spark),
-                f"{CATALOG}.silver.stock_news_v3",
-                f"{CHECKPOINT_BASE}/stock_news_v3",
+                f"{CATALOG}.silver.stock_news_v4",
+                f"{CHECKPOINT_BASE}/stock_news_v4",
                 "stock_news"
             ),
         ])

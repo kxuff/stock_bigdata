@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -60,6 +61,8 @@ class RouteCrewRunner:
             }
         )
         payload = _parse_payload(_extract_task_payload(task) or raw)
+        if route.route == AgentRoute.MARKET_BRIEF:
+            payload = self._ground_market_brief_payload(payload, request)
         return AgentQueryResponse(
             route=route.route,
             status="immediate",
@@ -70,6 +73,17 @@ class RouteCrewRunner:
             suggested_actions=route.suggested_actions or [SuggestedAction(label="Ask for single-symbol advisory", route=AgentRoute.SINGLE_SYMBOL_ADVISORY)],
             router_confidence=route.confidence,
         )
+
+    def _ground_market_brief_payload(self, payload: RouteAgentResponseOutput, request: AgentQueryRequest) -> RouteAgentResponseOutput:
+        """Keep agent prose, but force structured market data to come from tool/provider."""
+        limit = _market_brief_limit(request.message)
+        leaders = json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
+        payload.result_type = "market_brief"
+        result = dict(payload.result or {})
+        result["leaders"] = leaders
+        payload.result = result
+        payload.message = _ground_market_brief_message(payload.message, leaders)
+        return payload
 
     def _tools(self) -> list[BaseTool]:
         tools: list[BaseTool] = [
@@ -164,3 +178,111 @@ def _parse_payload(payload: Any) -> RouteAgentResponseOutput:
     if isinstance(payload, dict):
         return RouteAgentResponseOutput.model_validate(payload)
     return parse_model_output(payload, RouteAgentResponseOutput)
+
+
+def _market_brief_limit(message: str) -> int:
+    text = str(message).lower()
+    word_numbers = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+        "twenty": 20,
+    }
+    match = re.search(r"\b(?:top\s*)?(\d{1,2})\s*(?:stocks?|names?|tickers?)\b", text)
+    if match:
+        return max(1, min(int(match.group(1)), 20))
+    for word, value in word_numbers.items():
+        if re.search(rf"\b(?:top\s*)?{word}\s*(?:stocks?|names?|tickers?)\b", text):
+            return value
+    return 5
+
+
+def _ground_market_brief_message(message: str, leaders: list[dict[str, Any]]) -> str:
+    if not leaders:
+        return message
+    if not _message_matches_leaders(message, leaders):
+        message = _fallback_market_brief_message(leaders)
+    latest = _latest_as_of(leaders)
+    if latest:
+        message = re.sub(r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:Z)?)?\b", latest, message)
+    if "Not financial advice." not in message:
+        message = message.rstrip().rstrip(".") + ". Not financial advice."
+    return message
+
+
+def _message_matches_leaders(message: str, leaders: list[dict[str, Any]]) -> bool:
+    leader_symbols = {_row_symbol(row) for row in leaders[:5]}
+    leader_symbols.discard("")
+    if not leader_symbols:
+        return True
+    mentioned = set(re.findall(r"\b[A-Z]{2,5}\b", message))
+    ignored = {"ORCA", "RSI", "RSI14", "RVOL", "RVOL20"}
+    mentioned -= ignored
+    return not mentioned or bool(mentioned & leader_symbols)
+
+
+def _fallback_market_brief_message(leaders: list[dict[str, Any]]) -> str:
+    top = leaders[:5]
+    names = ", ".join(_row_symbol(row) for row in top if _row_symbol(row))
+    lead = top[0]
+    lead_symbol = _row_symbol(lead)
+    lead_score = _row_number(lead, "final_score")
+    lead_price = _row_number(lead, "latest_price", "price", "entry_price")
+    message = f"Top stocks to watch now: {names}."
+    if lead_symbol and lead_score is not None:
+        message += f" {lead_symbol} leads with ORCA score {lead_score:.2f}"
+        if lead_price is not None:
+            message += f" at {lead_price:.2f}"
+        message += "."
+    risk_notes = []
+    for row in leaders:
+        symbol = _row_symbol(row)
+        rsi = _row_number(row, "RSI14")
+        risk = _row_number(row, "risk_prob")
+        if symbol and rsi is not None and rsi >= 70:
+            risk_notes.append(f"{symbol} RSI14 {rsi:.1f}")
+        elif symbol and risk is not None and risk >= 0.30:
+            risk_notes.append(f"{symbol} risk_prob {risk:.2f}")
+    if risk_notes:
+        message += " Risk flags: " + "; ".join(risk_notes[:2]) + "."
+    latest = _latest_as_of(leaders)
+    if latest:
+        message += f" Latest data as_of {latest}."
+    return message
+
+
+def _row_symbol(row: dict[str, Any]) -> str:
+    return str(row.get("symbol") or row.get("Symbol") or "").upper()
+
+
+def _row_number(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _latest_as_of(leaders: list[dict[str, Any]]) -> str | None:
+    values = [str(row.get("as_of") or row.get("Datetime") or "") for row in leaders]
+    values = [value for value in values if value]
+    return max(values) if values else None

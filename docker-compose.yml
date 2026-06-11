@@ -373,8 +373,9 @@ services:
       - ./orca-agent-advisory/.env
     environment:
       LLM_PROVIDER: litellm
-      LLM_MODEL: openai/oc/deepseek-v4-flash-free
+      LLM_MODEL: openai/cx/gpt-5.4-mini
       LLM_BASE_URL: http://host.docker.internal:20128/v1
+      AGENT_TEMPERATURE: "1"
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
       ORCA_SPARK_MASTER: local[2]
@@ -418,8 +419,9 @@ services:
       - ./orca-agent-advisory/.env
     environment:
       LLM_PROVIDER: litellm
-      LLM_MODEL: openai/oc/deepseek-v4-flash-free
+      LLM_MODEL: openai/cx/gpt-5.4-mini
       LLM_BASE_URL: http://host.docker.internal:20128/v1
+      AGENT_TEMPERATURE: "1"
       ORCA_TOOL_RESULT_PROVIDER: bigdata
       ORCA_ICEBERG_CATALOG: nessie
       ORCA_SPARK_MASTER: local[2]
