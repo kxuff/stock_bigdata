@@ -92,7 +92,9 @@ def sync_jobs_to_query() -> None:
         st.query_params.pop("orca_jobs", None)
         return
     compact = [{"job_id": j.get("job_id"), "kind": j.get("kind"), "symbol": j.get("symbol"),
-                "created_at": j.get("created_at"), "status": j.get("status")} for j in jobs]
+                "created_at": j.get("created_at"), "started_at": j.get("started_at"),
+                "completed_at": j.get("completed_at"), "updated_at": j.get("updated_at"),
+                "status": j.get("status")} for j in jobs]
     encoded = base64.urlsafe_b64encode(
         json.dumps(compact, separators=(",", ":")).encode()
     ).decode().rstrip("=")
@@ -139,6 +141,21 @@ def fmt_elapsed(start: str | None) -> str:
     if not s:
         return "—"
     secs = max(0, int((utc_now() - s).total_seconds()))
+    m, s2 = divmod(secs, 60)
+    return f"{m}m {s2}s" if m else f"{s2}s"
+
+
+def fmt_duration(job: dict) -> str:
+    start = parse_iso(job.get("started_at") or job.get("created_at"))
+    if not start:
+        return "—"
+    status = display_status(job)
+    end = parse_iso(job.get("completed_at"))
+    if not end and status in {"completed", "failed"}:
+        end = parse_iso(job.get("updated_at"))
+    if not end:
+        end = utc_now()
+    secs = max(0, int((end - start).total_seconds()))
     m, s2 = divmod(secs, 60)
     return f"{m}m {s2}s" if m else f"{s2}s"
 

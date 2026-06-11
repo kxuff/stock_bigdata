@@ -149,7 +149,13 @@ def render_decision(decision: dict) -> None:
         f"{symbol} · {rec} · confidence {_conf_fmt(conf)}\n\n{decision.get('summary', '')}"
     )
     with st.expander("📋 Copy summary", expanded=False):
-        st.text_area("", summary_text, height=90, key=f"copy-{decision.get('run_id', uuid4())}", label_visibility="collapsed")
+        st.text_area(
+            "Copyable summary",
+            summary_text,
+            height=90,
+            key=f"copy-{decision.get('run_id', uuid4())}",
+            label_visibility="collapsed",
+        )
 
 
 # ── Agent response card ───────────────────────────────────────────────────────
@@ -233,7 +239,7 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
         if rows:
             _rows_header(rows)
             _warn_expander(rows)
-            st.dataframe(_display_rows(result_type, rows), use_container_width=True, hide_index=True)
+            st.dataframe(_display_rows(result_type, rows), width=900, hide_index=True)
         else:
             render_empty(f"No {result_type.replace('_', ' ')} data returned.")
         if result_type == "universe_screen":
@@ -241,6 +247,71 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
             if diagnostics:
                 with st.expander("🔍 Diagnostics"):
                     st.json(diagnostics)
+        return
+
+    if result_type == "data_diagnostics":
+        st.json(result.get("diagnostics") or result)
+        return
+
+    if result_type == "portfolio_rebalance":
+        msg = result.get("message", "")
+        if msg:
+            st.info(f"💬 {msg}")
+        changes = result.get("changes") or []
+        if changes:
+            st.dataframe(changes, width=900, hide_index=True)
+        c1, c2 = st.columns(2)
+        c1.metric("Cash target %", f"{result.get('cash_target_weight', 0):.2f}%")
+        c2.metric("Human review", "Required ✓" if result.get("human_review_required") else "Not required")
+        with st.expander("📐 Constraints"):
+            st.json(result.get("constraints") or {})
+        return
+
+    if result_type == "backtest_analysis":
+        status = result.get("status", "planned")
+        icon = {"completed": "✅", "planned": "📋", "disabled": "🚫"}.get(status, "•")
+        st.info(f"{icon} {result.get('limitation') or 'Backtest service not connected.'}")
+        if result.get("suggested_next_action"):
+            st.success(f"→ {result['suggested_next_action']}")
+        metrics = result.get("metrics") or {}
+        if metrics:
+            cols = st.columns(len(metrics))
+            for col, (k, v) in zip(cols, metrics.items()):
+                col.metric(k.replace("_", " ").title(), v)
+        with st.expander("📄 Backtest spec", expanded=True):
+            st.json(result.get("backtest_spec") or {})
+        return
+
+    _STREAMING_KEY = {
+        "streaming_pipeline_health":    "stages",
+        "streaming_freshness_check":    "rows",
+        "streaming_alert_review":       "alerts",
+        "streaming_feature_drift":      "rows",
+        "streaming_ingestion_lag":      "rows",
+        "streaming_topic_inspection":   "samples",
+        "streaming_quality_incidents":  "incidents",
+    }
+    if result_type == "streaming_symbol_monitor":
+        if result.get("symbol"):
+            st.metric("Symbol", result["symbol"])
+        fresh = result.get("freshness") or []
+        alerts = result.get("alerts") or []
+        if fresh:
+            st.markdown("**Freshness**")
+            st.dataframe(fresh, width=900, hide_index=True)
+        if alerts:
+            st.markdown("**Active alerts**")
+            st.dataframe(alerts, width=900, hide_index=True)
+        if not fresh and not alerts:
+            st.json(result)
+        return
+
+    if result_type in _STREAMING_KEY:
+        rows = result.get(_STREAMING_KEY[result_type]) or []
+        if rows:
+            st.dataframe(rows, width=900, hide_index=True)
+        else:
+            st.json(result)
         return
 
 
@@ -296,72 +367,6 @@ def _fmt_cell(col: str, value):
     if col in {"final_score", "latest_price", "price", "RSI14", "RVOL20", "risk_prob"}:
         return round(numeric, 2)
     return value
-
-    if result_type == "data_diagnostics":
-        st.json(result.get("diagnostics") or result)
-        return
-
-    if result_type == "portfolio_rebalance":
-        msg = result.get("message", "")
-        if msg:
-            st.warning(f"⚠️ {msg}")
-        changes = result.get("changes") or []
-        if changes:
-            st.dataframe(changes, use_container_width=True, hide_index=True)
-        c1, c2 = st.columns(2)
-        c1.metric("Cash target %", f"{result.get('cash_target_weight', 0):.2f}%")
-        c2.metric("Human review", "Required ✓" if result.get("human_review_required") else "Not required")
-        with st.expander("📐 Constraints"):
-            st.json(result.get("constraints") or {})
-        return
-
-    if result_type == "backtest_analysis":
-        status = result.get("status", "planned")
-        icon = {"completed": "✅", "planned": "📋", "disabled": "🚫"}.get(status, "•")
-        st.info(f"{icon} {result.get('limitation') or 'Backtest service not connected.'}")
-        if result.get("suggested_next_action"):
-            st.success(f"→ {result['suggested_next_action']}")
-        metrics = result.get("metrics") or {}
-        if metrics:
-            cols = st.columns(len(metrics))
-            for col, (k, v) in zip(cols, metrics.items()):
-                col.metric(k.replace("_", " ").title(), v)
-        with st.expander("📄 Backtest spec", expanded=True):
-            st.json(result.get("backtest_spec") or {})
-        return
-
-    # ── Streaming ──
-    _STREAMING_KEY = {
-        "streaming_pipeline_health":    "stages",
-        "streaming_freshness_check":    "rows",
-        "streaming_alert_review":       "alerts",
-        "streaming_feature_drift":      "rows",
-        "streaming_ingestion_lag":      "rows",
-        "streaming_topic_inspection":   "samples",
-        "streaming_quality_incidents":  "incidents",
-    }
-    if result_type == "streaming_symbol_monitor":
-        if result.get("symbol"):
-            st.metric("Symbol", result["symbol"])
-        fresh = result.get("freshness") or []
-        alerts = result.get("alerts") or []
-        if fresh:
-            st.markdown("**Freshness**")
-            st.dataframe(fresh, use_container_width=True, hide_index=True)
-        if alerts:
-            st.markdown("**Active alerts**")
-            st.dataframe(alerts, use_container_width=True, hide_index=True)
-        if not fresh and not alerts:
-            st.json(result)
-        return
-
-    if result_type in _STREAMING_KEY:
-        rows = result.get(_STREAMING_KEY[result_type]) or []
-        if rows:
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-        else:
-            st.json(result)
-        return
 
 
 # ── Empty state ───────────────────────────────────────────────────────────────

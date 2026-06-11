@@ -39,6 +39,18 @@ def create_agent_query_job(payload: dict[str, Any], timeout: float = 30.0) -> di
     return response.json()
 
 
+def fetch_agent_query_job(job_id: str, timeout: float = 10.0) -> dict[str, Any]:
+    response = requests.get(api_url(f"/api/v1/jobs/{job_id}"), timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_agent_query_job_result(job_id: str, timeout: float = 10.0) -> dict[str, Any]:
+    response = requests.get(api_url(f"/api/v1/jobs/{job_id}/result"), timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
 def stream_agent_query_job_events(job_id: str, timeout: tuple[float, float | None] = (5.0, None)):
     response = requests.get(
         api_url(f"/api/v1/jobs/{job_id}/events"),

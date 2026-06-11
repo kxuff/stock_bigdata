@@ -61,6 +61,20 @@ def inject() -> None:
   margin-bottom: 0.75rem;
   transition: border-color 0.2s ease;
 }
+[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"],
+[data-testid="stChatMessage"] [data-testid="stMetric"],
+[data-testid="stChatMessage"] [data-testid="stExpander"] {
+  max-width: calc(100% - 1.25rem);
+}
+[data-testid="stChatMessage"] [data-testid="stDataFrame"] {
+  margin: 0.75rem 0.625rem 1rem 0.625rem;
+}
+[data-testid="stChatMessage"] [data-testid="stHorizontalBlock"] {
+  padding: 0 0.625rem;
+}
+[data-testid="stChatMessage"] [data-testid="stExpander"] {
+  margin: 0.75rem 0.625rem;
+}
 [data-testid="stChatMessage"]:hover {
   border-color: var(--border-hi) !important;
 }
@@ -111,7 +125,23 @@ def inject() -> None:
   transition: border-color 0.2s;
 }
 [data-testid="stMetric"]:hover { border-color: var(--border-hi); }
-[data-testid="stMetricLabel"] { color: var(--text-muted) !important; font-size: 0.72rem !important; text-transform: uppercase; letter-spacing: 0.1em; }
+[data-testid="stMetricLabel"] {
+  color: var(--text) !important;
+  font-size: 0.72rem !important;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.25 !important;
+}
+[data-testid="stMetricLabel"] > div,
+[data-testid="stMetricLabel"] p {
+  color: var(--text) !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
 [data-testid="stMetricValue"] { color: var(--text) !important; font-weight: 700 !important; font-size: 1.5rem !important; }
 
 /* ── Dataframes ── */

@@ -15,6 +15,7 @@ from app.infrastructure.llm.llm_factory import create_llm
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse, RoutedAgentQuery, SuggestedAction
 from app.schemas.enums import AgentRoute
 from app.schemas.route_agent_outputs import RouteAgentResponseOutput
+from app.schemas.route_results import PortfolioRebalanceResult
 from app.validators.output_repair import parse_model_output
 
 
@@ -29,6 +30,7 @@ class RouteCrewRunner:
     def run(self, request: AgentQueryRequest, route: RoutedAgentQuery) -> AgentQueryResponse:
         llm = self.llm_factory(self.settings)
         tools = self._tools()
+        grounded_market_rows = self._prefetch_market_screen_rows(request, route.route)
         agent = CrewAgent(
             config=route_agent_config("route_response_agent"),
             llm=llm,
@@ -58,11 +60,15 @@ class RouteCrewRunner:
                 "symbols_json": json.dumps(route.symbols),
                 "risk_tolerance": request.context.risk_tolerance,
                 "investment_horizon": request.context.investment_horizon,
+                "portfolio_json": json.dumps(_portfolio_context(request), default=str),
+                "market_screen_json": json.dumps(grounded_market_rows, default=str),
             }
         )
         payload = _parse_payload(_extract_task_payload(task) or raw)
         if route.route in {AgentRoute.MARKET_BRIEF, AgentRoute.TOP_STOCKS}:
-            payload = self._ground_market_screen_payload(payload, request, route.route)
+            payload = self._ground_market_screen_payload(payload, request, route.route, grounded_market_rows)
+        if route.route == AgentRoute.PORTFOLIO_REBALANCE:
+            payload = self._ground_portfolio_rebalance_payload(payload, request)
         return AgentQueryResponse(
             route=route.route,
             status="immediate",
@@ -77,11 +83,24 @@ class RouteCrewRunner:
     def _ground_market_brief_payload(self, payload: RouteAgentResponseOutput, request: AgentQueryRequest) -> RouteAgentResponseOutput:
         return self._ground_market_screen_payload(payload, request, AgentRoute.MARKET_BRIEF)
 
-    def _ground_market_screen_payload(self, payload: RouteAgentResponseOutput, request: AgentQueryRequest, route: AgentRoute) -> RouteAgentResponseOutput:
+    def _prefetch_market_screen_rows(self, request: AgentQueryRequest, route: AgentRoute) -> list[dict[str, Any]]:
+        if route not in {AgentRoute.MARKET_BRIEF, AgentRoute.TOP_STOCKS}:
+            return []
+        default = 5 if route == AgentRoute.MARKET_BRIEF else 10
+        limit = _market_screen_limit(request.message, default=default)
+        return json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
+
+    def _ground_market_screen_payload(
+        self,
+        payload: RouteAgentResponseOutput,
+        request: AgentQueryRequest,
+        route: AgentRoute,
+        grounded_rows: list[dict[str, Any]] | None = None,
+    ) -> RouteAgentResponseOutput:
         """Keep agent prose, but force structured market data to come from tool/provider."""
         default = 5 if route == AgentRoute.MARKET_BRIEF else 10
         limit = _market_screen_limit(request.message, default=default)
-        rows = json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
+        rows = grounded_rows or json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
         payload.result_type = "market_brief" if route == AgentRoute.MARKET_BRIEF else "top_stocks"
         result = dict(payload.result or {})
         if route == AgentRoute.MARKET_BRIEF:
@@ -133,6 +152,47 @@ class RouteCrewRunner:
                             "allowed_symbols": allowed_symbols,
                             rows_key: rows,
                             "result": {k: v for k, v in result.items() if k != rows_key},
+                        },
+                        default=str,
+                    ),
+                },
+            ],
+        )
+        return str(response["choices"][0]["message"]["content"]).strip()
+
+    def _ground_portfolio_rebalance_payload(self, payload: RouteAgentResponseOutput, request: AgentQueryRequest) -> RouteAgentResponseOutput:
+        payload = _validate_portfolio_rebalance_payload(payload, request, validate_message=False)
+        if _invalid_portfolio_message(payload.message):
+            payload.message = self._repair_portfolio_message(payload.message, request, payload.result)
+            payload.result["message"] = payload.message
+        return _validate_portfolio_rebalance_payload(payload, request, validate_message=True)
+
+    def _repair_portfolio_message(self, message: str, request: AgentQueryRequest, result: dict[str, Any]) -> str:
+        import litellm
+
+        response = litellm.completion(
+            model=self.settings.llm_model,
+            api_key=self.settings.llm_api_key.get_secret_value() if self.settings.llm_api_key else None,
+            api_base=self.settings.llm_base_url,
+            temperature=self.settings.agent_temperature,
+            timeout=min(self.settings.agent_timeout_seconds, 30),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the portfolio rebalance explanation using only the provided portfolio context and rebalance result. "
+                        "Do not invent market metrics, dates, scores, RSI, RVOL, risk_prob, final_score, source_refs, or as_of timestamps. "
+                        "Do not claim trades were executed. Explain in natural advisor-style paragraphs: concentration, proposed weight changes, cash buffer, and what to review before acting. Return plain text only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "user_query": request.message,
+                            "invalid_message": message,
+                            "portfolio_context": _portfolio_context(request),
+                            "rebalance_result": result,
                         },
                         default=str,
                     ),
@@ -211,6 +271,7 @@ def _task_name(route: AgentRoute) -> str:
         AgentRoute.UNIVERSE_SCREEN: "route_universe_screen_task",
         AgentRoute.MARKET_BRIEF: "route_market_brief_task",
         AgentRoute.TOP_STOCKS: "route_top_stocks_task",
+        AgentRoute.PORTFOLIO_REBALANCE: "route_portfolio_rebalance_task",
         AgentRoute.DATA_DIAGNOSTICS: "route_data_diagnostics_task",
         AgentRoute.STREAMING_FRESHNESS_CHECK: "route_streaming_freshness_task",
     }.get(route, "route_market_brief_task")
@@ -235,6 +296,88 @@ def _parse_payload(payload: Any) -> RouteAgentResponseOutput:
     if isinstance(payload, dict):
         return RouteAgentResponseOutput.model_validate(payload)
     return parse_model_output(payload, RouteAgentResponseOutput)
+
+
+def _portfolio_context(request: AgentQueryRequest) -> dict[str, Any]:
+    metadata = request.context.metadata or {}
+    holdings = metadata.get("portfolio") or metadata.get("holdings") or []
+    return {
+        "holdings": holdings,
+        "constraints": {
+            "max_single_asset_weight": metadata.get("max_single_asset_weight", 30),
+            "min_cash_weight": metadata.get("min_cash_weight", 5),
+            "excluded_symbols": metadata.get("excluded_symbols") or [],
+            "allowed_symbols": metadata.get("allowed_symbols") or [],
+            "trade_execution": "disabled",
+            "human_review_required": True,
+        },
+        "risk_tolerance": request.context.risk_tolerance,
+        "investment_horizon": request.context.investment_horizon,
+    }
+
+
+def _validate_portfolio_rebalance_payload(payload: RouteAgentResponseOutput, request: AgentQueryRequest, *, validate_message: bool = True) -> RouteAgentResponseOutput:
+    payload.result_type = "portfolio_rebalance"
+    result = dict(payload.result or {})
+    result.setdefault("constraints", {})
+    constraints = dict(result["constraints"] or {})
+    constraints["trade_execution"] = "disabled"
+    constraints["human_review_required"] = True
+    result["constraints"] = constraints
+    result["human_review_required"] = True
+    result.setdefault("cash_target_weight", 0.0)
+    result.setdefault("message", payload.message)
+    changes = result.get("changes") or []
+    normalized_changes = []
+    seen_symbols = set()
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        symbol = str(change.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        current = _as_float(change.get("current_weight"), 0.0)
+        target = _as_float(change.get("target_weight"), current)
+        normalized_changes.append({
+            "symbol": symbol,
+            "current_weight": round(current, 2),
+            "target_weight": round(target, 2),
+            "change": round(target - current, 2),
+        })
+        seen_symbols.add(symbol)
+    for holding in (_portfolio_context(request).get("holdings") or []):
+        if not isinstance(holding, dict):
+            continue
+        symbol = str(holding.get("symbol") or "").upper().strip()
+        if not symbol or symbol in seen_symbols:
+            continue
+        current = _as_float(holding.get("weight"), 0.0)
+        normalized_changes.append({"symbol": symbol, "current_weight": round(current, 2), "target_weight": round(current, 2), "change": 0.0})
+    result["changes"] = normalized_changes
+    PortfolioRebalanceResult.model_validate(result)
+    if validate_message and _invalid_portfolio_message(payload.message):
+        raise ValueError("portfolio rebalance agent message contains unsupported raw fields, dates, or execution language")
+    if _contains_trade_execution_language(payload.message):
+        raise ValueError("portfolio rebalance agent message implies trade execution")
+    payload.result = result
+    return payload
+
+
+def _as_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _contains_trade_execution_language(message: str) -> bool:
+    return bool(re.search(r"\b(executed|placed|submitted|bought|sold|trade executed|order placed)\b", message, flags=re.IGNORECASE))
+
+
+def _invalid_portfolio_message(message: str) -> bool:
+    raw_terms = r"\b(final_score|risk_prob|RVOL20|RSI14|pred_a|source_refs|as_of|Datetime)\b"
+    date_pattern = r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:Z)?)?\b"
+    return bool(re.search(raw_terms, message, flags=re.IGNORECASE) or re.search(date_pattern, message) or _contains_trade_execution_language(message))
 
 
 def _market_brief_limit(message: str) -> int:
@@ -277,6 +420,8 @@ def _market_screen_limit(message: str, default: int = 5) -> int:
 def _validate_agent_market_message(message: str, leaders: list[dict[str, Any]], *, check_symbols: bool = True) -> None:
     if not leaders:
         return
+    if _contains_false_missing_market_data_claim(message):
+        raise ValueError("agent market message claims tool data is missing despite grounded rows")
     if check_symbols and not _message_matches_leaders(message, leaders):
         raise ValueError("agent market message mentions symbols outside grounded tool rows")
     if _contains_user_facing_date(message):
@@ -285,8 +430,20 @@ def _validate_agent_market_message(message: str, leaders: list[dict[str, Any]], 
         raise ValueError("agent market message contains removed disclaimer")
 
 
+def _contains_false_missing_market_data_claim(message: str) -> bool:
+    patterns = [
+        r"\bno tool data\b",
+        r"\bno grounded\b",
+        r"\bno market data\b",
+        r"\bno data returned\b",
+        r"\bno .*list can be produced\b",
+        r"\bcannot produce\b.*\b(?:top[- ]stocks|market)\b",
+    ]
+    return any(re.search(pattern, message, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def _message_matches_leaders(message: str, leaders: list[dict[str, Any]]) -> bool:
-    leader_symbols = {_row_symbol(row) for row in leaders[:5]}
+    leader_symbols = {_row_symbol(row) for row in leaders}
     leader_symbols.discard("")
     if not leader_symbols:
         return True

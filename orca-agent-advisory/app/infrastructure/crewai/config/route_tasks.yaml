@@ -42,11 +42,14 @@ route_universe_screen_task:
 route_market_brief_task:
   description: >
     User query: {user_query}. Interpret the user's requested market brief from
-    this exact query. Choose the MarketScreenTool input from the user's intent:
+    this exact query. Grounded market rows JSON: {market_screen_json}. Use this
+    JSON as the authoritative market data for the user-facing message and result;
+    call MarketScreenTool only if this JSON is empty or unusable.
+    If tool use is needed, choose the MarketScreenTool input from the user's intent:
     if they ask for a specific count (for example top 10, 10 stocks, ten names),
     call MarketScreenTool with that count; otherwise use 5. Keep tool input
     reasonable for chat responses (1 to 20). Summarize current ORCA market
-    leaders, risks, and news themes from tool data only. Write for a normal
+    leaders, risks, and news themes from grounded rows or tool data only. Write for a normal
     investor, not a quant dashboard. Avoid raw field names such as final_score,
     risk_prob, RSI14, RVOL20, pred_a, r1/r3/r5. Convert scores on a 0..1 scale
     into plain language or /100 only when useful. Explain what signals mean:
@@ -76,10 +79,13 @@ route_market_brief_task:
 route_top_stocks_task:
   description: >
     User query: {user_query}. Interpret the user's requested ranked top-stocks
-    list from this exact query. Choose the MarketScreenTool input from the
+    list from this exact query. Grounded market rows JSON: {market_screen_json}.
+    Use this JSON as the authoritative ranked stock list for the user-facing
+    message and result; call MarketScreenTool only if this JSON is empty or
+    unusable. If tool use is needed, choose the MarketScreenTool input from the
     user's requested count (for example top 10, 10 stocks, ten names); otherwise
     use 10. Keep tool input reasonable for chat responses (1 to 20). Use only
-    tool data. Write a concise ranked list in natural language. Avoid raw field
+    grounded rows or tool data. Write a concise ranked list in natural language. Avoid raw field
     names such as final_score, risk_prob, RSI14, RVOL20, pred_a, r1/r3/r5.
     Convert scores on a 0..1 scale into /100 only when useful. Explain why each
     name is interesting in plain English using price action, risk, sentiment,
@@ -94,6 +100,32 @@ route_top_stocks_task:
   expected_output: >
     RouteAgentResponseOutput JSON with message, result_type="top_stocks",
     result containing stocks, source_refs, and limitations. Return JSON only.
+  agent: route_response_agent
+
+route_portfolio_rebalance_task:
+  description: >
+    User query: {user_query}. Portfolio context JSON: {portfolio_json}.
+    Create an agent-driven rebalance proposal from the user query, provided
+    holdings, and constraints. If portfolio_json.holdings is empty but the user
+    query includes holdings like "AAPL 35%, MSFT 30%", parse those holdings from
+    the user query yourself. If no holdings are present in either place, explain
+    naturally what holdings are needed and return result_type="portfolio_rebalance"
+    with empty changes.
+    Do not execute trades. Do not claim trades were placed. Trade execution is
+    disabled and human review is required. Use the user's risk tolerance and
+    investment horizon. Explain the recommendation in paragraphs like an advisor:
+    portfolio concentration, which weights should rise/fall, why, cash target,
+    and what the user should review before acting. You may choose target weights;
+    do not default to equal weight unless your reasoning supports it. Use only
+    portfolio_json unless another tool is explicitly called and returns data.
+    Do not invent market metrics, stale dates, scores, RSI, RVOL, risk_prob,
+    final_score, source_refs, or as_of timestamps. Avoid raw schema field names
+    in the user-facing message; explain in plain language.
+  expected_output: >
+    RouteAgentResponseOutput JSON with message, result_type="portfolio_rebalance",
+    result containing changes, cash_target_weight, constraints,
+    human_review_required=true, and message. Each change must include symbol,
+    current_weight, target_weight, and change. Return JSON only.
   agent: route_response_agent
 
 route_data_diagnostics_task:

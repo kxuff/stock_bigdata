@@ -67,7 +67,7 @@ with st.sidebar:
     st.header("Controls")
     st.caption("Market, stock monitor, and alerts update every 60 seconds without reloading the full page.")
     st.caption("News updates every 5 minutes.")
-    if st.button("Refresh now", use_container_width=True):
+    if st.button("Refresh now", width="stretch"):
         clear_caches()
         st.rerun()
     st.caption(f"Last manual refresh: {st.session_state.get('last_manual_refresh', 'not used')}")

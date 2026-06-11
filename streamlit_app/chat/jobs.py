@@ -5,6 +5,8 @@ import streamlit as st
 
 from services.advisory_api import (
     create_agent_query_job,
+    fetch_agent_query_job,
+    fetch_agent_query_job_result,
     fetch_health,
     fetch_status,
     stream_agent_query_job_events,
@@ -12,19 +14,10 @@ from services.advisory_api import (
 from chat import state
 
 
-# ── Horizon / risk maps ───────────────────────────────────────────────────────
+# ── Risk / model horizon context ───────────────────────────────────────────────
 
 def risk_value(label: str) -> str:
     return {"Low": "CONSERVATIVE", "Medium": "MODERATE", "High": "AGGRESSIVE"}.get(label, "MODERATE")
-
-
-def horizon_value(label: str) -> str:
-    return {
-        "Intraday": "INTRADAY",
-        "1-4 weeks": "SHORT_TERM",
-        "1-3 months": "MEDIUM_TERM",
-        "6-12 months": "LONG_TERM",
-    }.get(label, "SHORT_TERM")
 
 
 # ── Error formatting ──────────────────────────────────────────────────────────
@@ -79,16 +72,16 @@ def check_backend() -> dict:
 
 # ── Submit ────────────────────────────────────────────────────────────────────
 
-def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
+def submit(prompt: str, risk: str) -> str | None:
     """Create /api/v1/query async job, update session state, return error string or None."""
     try:
         fetch_health()
         job = create_agent_query_job({
             "message": prompt,
             "context": {
-                "symbol": symbol or None,
-                "investment_horizon": horizon_value(horizon),
+                "investment_horizon": "SHORT_TERM",
                 "risk_tolerance": risk_value(risk),
+                "metadata": {"model_horizon_days": 14},
             },
         })
         if not isinstance(job, dict) or not job.get("job_id"):
@@ -96,7 +89,7 @@ def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
         state.add_job({
             "job_id":         job["job_id"],
             "kind":           "agent_query",
-            "symbol":         symbol or "N/A",
+            "symbol":         "Prompt",
             "route":          None,
             "prompt":         prompt,
             "created_at":     state.utc_now().isoformat(),
@@ -112,7 +105,35 @@ def submit(prompt: str, symbol: str, horizon: str, risk: str) -> str | None:
 
 # ── Stream events ─────────────────────────────────────────────────────────────
 
-def stream_events(job: dict) -> None:
+def poll_job(job: dict) -> None:
+    """Poll one job once. Streamlit page reruns periodically while active."""
+    try:
+        status_payload = fetch_agent_query_job(job["job_id"])
+    except Exception as exc:  # noqa: BLE001
+        job["error_message"] = _safe_error(exc)
+        return
+    job.update({
+        "status": status_payload.get("status", job.get("status")),
+        "progress_stage": status_payload.get("progress_stage"),
+        "progress_pct": status_payload.get("progress"),
+        "run_id": status_payload.get("run_id", job.get("run_id")),
+        "started_at": status_payload.get("started_at") or job.get("started_at"),
+        "completed_at": status_payload.get("completed_at") or job.get("completed_at"),
+        "updated_at": status_payload.get("updated_at") or state.utc_now().isoformat(),
+    })
+    display_status = state.display_status(job)
+    if display_status in {"completed", "succeeded"} and not job.get("result_fetched"):
+        result = fetch_agent_query_job_result(job["job_id"])
+        _add_agent_query_result(job["job_id"], result)
+        job.update({"status": "completed", "result_fetched": True, "events_complete": True})
+    elif display_status == "failed":
+        err = status_payload.get("error") or {}
+        err_msg = _extract_error(err if isinstance(err, dict) else status_payload)
+        job.update({"status": "failed", "error": err, "error_message": err_msg, "events_complete": True})
+        state.add_once(f"{job['job_id']}:failed", f"### ORCA job failed: {job.get('symbol','N/A')}\n\n{err_msg}")
+    state.sync_jobs_to_query()
+
+def stream_events(job: dict, on_update=None) -> None:
     try:
         if not job.get("job_id"):
             job["status"] = "failed"; job["error_message"] = "Missing job_id."
@@ -128,19 +149,29 @@ def stream_events(job: dict) -> None:
                     "progress_stage": data.get("progress_stage"),
                     "progress_pct":   data.get("progress"),
                     "run_id":         data.get("run_id", job.get("run_id")),
+                    "started_at":     data.get("started_at") or job.get("started_at"),
+                    "completed_at":   data.get("completed_at") or job.get("completed_at"),
                     "updated_at":     data.get("updated_at") or state.utc_now().isoformat(),
                 })
                 if state.is_stale(job):
                     job["status"] = "stale"
+                if on_update:
+                    on_update(job)
             elif etype == "result":
                 _add_agent_query_result(job["job_id"], data)
                 job.update({"status": "completed", "result_fetched": True,
-                            "events_complete": True, "updated_at": state.utc_now().isoformat()})
+                            "events_complete": True, "completed_at": data.get("completed_at") or state.utc_now().isoformat(),
+                            "updated_at": data.get("updated_at") or state.utc_now().isoformat()})
+                if on_update:
+                    on_update(job)
                 break
             elif etype in {"failure", "error"}:
                 err_msg = _extract_error(data)
                 job.update({"status": "failed", "error": data, "error_message": err_msg,
-                            "events_complete": True, "updated_at": state.utc_now().isoformat()})
+                            "events_complete": True, "completed_at": data.get("completed_at") or state.utc_now().isoformat(),
+                            "updated_at": data.get("updated_at") or state.utc_now().isoformat()})
+                if on_update:
+                    on_update(job)
                 state.add_once(f"{job['job_id']}:failed",
                     f"### ORCA job failed: {job.get('symbol','N/A')}\n\n{err_msg}")
                 break
@@ -168,13 +199,12 @@ def _add_agent_query_result(job_id: str, response: dict) -> None:
 
 # ── Retry ─────────────────────────────────────────────────────────────────────
 
-def retry_job(job: dict, horizon: str, risk: str) -> None:
+def retry_job(job: dict, risk: str) -> None:
     prompt = job.get("prompt")
-    symbol = job.get("symbol")
-    if not prompt or not symbol:
+    if not prompt:
         st.warning("Retry unavailable — prompt not persisted across reload.")
         return
     state.add_user(prompt)
-    reply = submit(prompt, symbol, horizon, risk)
+    reply = submit(prompt, risk)
     if reply:
         state.add_assistant(reply)

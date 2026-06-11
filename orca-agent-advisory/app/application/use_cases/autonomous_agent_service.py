@@ -69,6 +69,8 @@ class AutonomousAgentService:
                 return self.route_crew_runner.run(request, routed)
             return self.route_services.data_diagnostics(routed)
         if routed.route == AgentRoute.PORTFOLIO_REBALANCE:
+            if self.route_crew_runner is not None:
+                return self.route_crew_runner.run(request, routed)
             return self.route_services.portfolio_rebalance(request, routed)
         if routed.route == AgentRoute.BACKTEST_ANALYSIS:
             return self.route_services.backtest_analysis(request, routed)
