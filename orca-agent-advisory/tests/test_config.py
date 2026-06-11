@@ -105,8 +105,6 @@ def test_load_settings_ignores_old_api_key_env(monkeypatch: pytest.MonkeyPatch) 
 def test_config_flags_default_true() -> None:
     settings = AgentSettings()
 
-    assert settings.advisory_enable_critic_stage is True
-    assert settings.advisory_use_llm_critic_stage is True
     assert settings.crewai_verbose is True
     assert settings.crewai_tracing is True
     assert settings.crewai_share_crew is True

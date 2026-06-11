@@ -57,14 +57,16 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
     if not os.getenv("FINBERT_API_URL", "").rstrip("/"):
         raise RuntimeError("FINBERT_API_URL is required for sentiment scoring")
     rows: list[dict[str, Any]] = []
-    min_dt = pd.Timestamp(target_date - timedelta(days=7))
+    lookback_days = int(os.getenv("US_STOCK_SENTIMENT_LOOKBACK_DAYS", "14"))
+    max_articles_per_symbol = int(os.getenv("US_STOCK_SENTIMENT_MAX_ARTICLES", "30"))
+    min_dt = pd.Timestamp(target_date - timedelta(days=lookback_days))
     max_dt = pd.Timestamp(target_date + timedelta(days=1))
     for symbol in symbols:
         aliases = _symbol_aliases(symbol)
-        articles = _news_items(symbol)
+        articles = _merged_news_items(symbol, target_date, lookback_days=lookback_days)
         scored: list[dict[str, Any]] = []
         fallback_scored: list[dict[str, Any]] = []
-        for item in articles:
+        for item in articles[:max_articles_per_symbol]:
             item = _flatten_news_item(item)
             published = _published_at(item)
             in_window = published is None or (min_dt <= published.tz_localize(None) < max_dt)
@@ -82,6 +84,7 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
                 "url": item.get("link") or item.get("url"),
                 "published_at": published,
                 "finbert_label": finbert.get("label"),
+                "source": item.get("data_source") or item.get("source") or item.get("provider"),
             }
             fallback_scored.append(candidate)
             if published is not None and not (min_dt <= published.tz_localize(None) < max_dt):
@@ -112,7 +115,7 @@ def _build_sentiment(symbols: list[str], target_date) -> pd.DataFrame:
                 "sentiment_scored_at": scored_at,
                 "stale_article_count": stale_article_count,
                 "top_drivers": [item["headline"] for item in sorted(scored, key=lambda row: abs(row["score"]), reverse=True)[:3]],
-                "source_refs": _sentiment_source_refs(symbol),
+                "source_refs": _sentiment_source_refs(symbol, scored),
                 "process_date": scored_at,
             }
         )
@@ -194,9 +197,54 @@ def _build_valuation(symbols: list[str], target_date) -> pd.DataFrame:
 
 def _news_items(symbol: str) -> list[dict[str, Any]]:
     try:
-        return list(yf.Ticker(symbol).news or [])
+        return [{**item, "data_source": "yfinance"} for item in list(yf.Ticker(symbol).news or [])]
     except Exception:
         return []
+
+
+def _finnhub_news_items(symbol: str, target_date, *, lookback_days: int) -> list[dict[str, Any]]:
+    api_key = os.getenv("FINNHUB_API_KEY")
+    if not api_key:
+        return []
+    from_date = (target_date - timedelta(days=lookback_days)).isoformat()
+    to_date = target_date.isoformat()
+    endpoint = (
+        "https://finnhub.io/api/v1/company-news"
+        f"?symbol={symbol}&from={from_date}&to={to_date}&token={api_key}"
+    )
+    req = urlrequest.Request(endpoint, headers={"User-Agent": "stock-bigdata-eod/1.0"})
+    try:
+        with urlrequest.urlopen(req, timeout=float(os.getenv("FINNHUB_API_TIMEOUT", "20"))) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [{**item, "data_source": "finnhub"} for item in payload if isinstance(item, dict)]
+
+
+def _merged_news_items(symbol: str, target_date, *, lookback_days: int) -> list[dict[str, Any]]:
+    merged = _news_items(symbol) + _finnhub_news_items(symbol, target_date, lookback_days=lookback_days)
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in merged:
+        flat = _flatten_news_item(item)
+        key = _news_dedupe_key(flat)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(flat)
+    return sorted(deduped, key=lambda item: _published_at(item) or pd.Timestamp.min.tz_localize("UTC"), reverse=True)
+
+
+def _news_dedupe_key(item: dict[str, Any]) -> str:
+    url = str(item.get("link") or item.get("url") or "").strip().lower()
+    if url:
+        return f"url:{url}"
+    title = str(item.get("title") or item.get("headline") or "").strip().lower()
+    published = _published_at(item)
+    day = published.date().isoformat() if published is not None else "unknown"
+    return f"title:{title}:{day}"
 
 
 def _flatten_news_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -239,7 +287,7 @@ def _is_relevant_news(text: str, aliases: set[str]) -> bool:
 
 
 def _published_at(item: dict[str, Any]) -> pd.Timestamp | None:
-    value = item.get("providerPublishTime") or item.get("pubDate")
+    value = item.get("providerPublishTime") or item.get("datetime") or item.get("pubDate")
     if value is None:
         return None
     try:
@@ -278,8 +326,15 @@ def _score_sentiment_with_finbert(text: str) -> dict[str, Any]:
     }
 
 
-def _sentiment_source_refs(symbol: str) -> list[str]:
-    return [f"yfinance.news:{symbol}", "finbert:ProsusAI/finbert"]
+def _sentiment_source_refs(symbol: str, scored: list[dict[str, Any]]) -> list[str]:
+    sources = {str(item.get("source") or "").lower() for item in scored}
+    refs: list[str] = []
+    if "yfinance" in sources:
+        refs.append(f"yfinance.news:{symbol}")
+    if "finnhub" in sources:
+        refs.append(f"finnhub.company_news:{symbol}")
+    refs.append("finbert:ProsusAI/finbert")
+    return refs
 
 
 def _sentiment_label(score: float, scored: list[dict[str, Any]]) -> str:

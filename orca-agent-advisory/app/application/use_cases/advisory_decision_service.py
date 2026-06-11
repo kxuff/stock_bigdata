@@ -5,7 +5,6 @@ from app.application.decision.portfolio_assembler import assemble_portfolio_deci
 from app.application.decision.single_symbol_assembler import assemble_single_symbol_decision
 from app.application.ports.crew_orchestrator import CrewOrchestratedOutputs, CrewOrchestrator
 from app.application.ports.output_store import DecisionOutputStore
-from app.application.services.critic_service import run_critic_debate_stage
 from app.config import AgentSettings, load_settings
 from app.schemas.agent_outputs import AgentOutputBundle
 from app.schemas.decision import PortfolioDecision, SingleSymbolDecision
@@ -29,8 +28,6 @@ class AdvisoryDecisionService:
     def decide(self, request: AdvisoryDecisionRequest, tool_results: ToolResultBundle) -> DecisionResult:
         tool_results.validate_required_for(request)
         agent_outputs, synthesis = self._orchestrate(request, tool_results)
-        if self.settings.advisory_enable_critic_stage:
-            synthesis = run_critic_debate_stage(synthesis=synthesis, agent_outputs=agent_outputs)
         source_quality_assessment = assess_source_quality(request, tool_results)
 
         if request.decision_mode == DecisionMode.PORTFOLIO_RECOMMENDATION:

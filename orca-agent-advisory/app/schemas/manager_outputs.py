@@ -17,10 +17,6 @@ class ManagerSynthesisOutput(BaseModel):
     risk_warnings: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     data_citations: list[str] = Field(default_factory=list)
-    debate_applied: bool = False
-    debate_summary: str | None = None
-    bullish_critic_points: list[str] = Field(default_factory=list)
-    bearish_critic_points: list[str] = Field(default_factory=list)
     portfolio_allocation: list[PortfolioAllocation] = Field(default_factory=list)
     portfolio_summary: PortfolioSummary | None = None
 

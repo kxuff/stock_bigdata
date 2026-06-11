@@ -1,6 +1,7 @@
 from typing import Any, cast
 
 from app.infrastructure.crewai.config_loader import crewai_task_config
+from app.schemas.agent_outputs import ValuationAgentOutput
 
 from crewai import Task
 
@@ -11,5 +12,5 @@ def create_valuation_task(agent: Any) -> Any:
     return CrewTask(
         config=crewai_task_config("valuation_task"),
         agent=agent,
+        output_pydantic=ValuationAgentOutput,
     )
-

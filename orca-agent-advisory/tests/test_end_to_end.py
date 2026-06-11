@@ -118,26 +118,6 @@ def test_missing_required_market_tool_result_fails_before_agents() -> None:
         service.decide(request, bundle)
 
 
-def test_critic_stage_feature_flag_enriches_output(tmp_path: Path) -> None:
-    request = AdvisoryDecisionRequest.model_validate(load_sample("normal_request.json"))
-    bundle = ToolResultBundle.model_validate(load_sample("normal_tool_results.json"))
-    service = AdvisoryDecisionService(
-        settings=AgentSettings(
-            advisory_enable_critic_stage=True,
-            advisory_output_dir=tmp_path,
-        ),
-        crew_runner=FixtureCrewRunner(),
-        output_store=DecisionOutputStore(tmp_path),
-    )
-
-    decision = service.decide(request, bundle)
-
-    assert isinstance(decision, SingleSymbolDecision)
-    assert decision.debate_applied is True
-    assert decision.debate_summary is not None
-    assert decision.bullish_critic_points or decision.bearish_critic_points
-
-
 def test_single_symbol_manager_synthesis_requires_recommendation(tmp_path: Path) -> None:
     class PortfolioDraftRunner:
         def run_orchestrated(

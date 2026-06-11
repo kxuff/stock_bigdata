@@ -14,9 +14,6 @@ class AgentSettings(BaseModel):
     agent_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     agent_max_retries: int = Field(default=3, ge=0)
     agent_timeout_seconds: int = Field(default=180, ge=1)
-    advisory_enable_critic_stage: bool = True
-    advisory_use_llm_critic_stage: bool = True
-    advisory_llm_critic_timeout_seconds: int = Field(default=60, ge=1)
     advisory_output_dir: Path = Path("outputs/advisory_decisions")
     decision_job_database_url: str | None = None
     decision_job_table: str = "orca_decision_jobs"
