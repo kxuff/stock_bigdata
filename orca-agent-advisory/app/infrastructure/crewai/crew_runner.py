@@ -130,7 +130,13 @@ def build_mocked_upstream_tools(tool_results: ToolResultBundle) -> dict[str, Any
         ),
         "valuation_snapshot": _StaticTool(
             name="FundamentalsTool",
-            description="Read-only mocked fundamentals and valuation lookup.",
+            description=(
+                "Read-only valuation snapshot lookup. Tool output is evidence, "
+                "not the final response schema. Final valuation_task output must "
+                "be ValuationAgentOutput with status, summary, confidence, "
+                "valuation_label, valuation_drivers, missing_fields, "
+                "limitations, and source_refs only."
+            ),
             bundle_field="valuation_snapshot",
             tool_results=tool_results,
         ),

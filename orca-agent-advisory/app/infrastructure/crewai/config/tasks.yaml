@@ -24,9 +24,13 @@ sentiment_task:
     sentiment_label=UNAVAILABLE, missing_fields, and a limitation. Do not infer
     sentiment from market price, valuation, or risk data.
   expected_output: >
-    SentimentAgentOutput JSON with sentiment_label, top_drivers,
-    missing_fields, limitations, confidence, and source_refs. Return only valid
-    JSON with no markdown fences. Example:
+    SentimentAgentOutput JSON with status, summary, confidence,
+    sentiment_label, top_drivers, missing_fields, limitations, and source_refs.
+    The summary field is required. Use only values returned by
+    NewsSentimentTool; do not invent article titles, dates, labels, or drivers.
+    If the tool returns sentiment_label=MIXED, do not change it to BULLISH or
+    BEARISH unless the tool output explicitly says so. Return only valid JSON
+    with no markdown fences. Example:
     {"status":"SKIPPED","summary":"Sentiment context is unavailable; no sentiment inference was made.","confidence":0.0,"missing_fields":["sentiment_snapshot"],"limitations":["SENTIMENT_CONTEXT_UNAVAILABLE"],"source_refs":[],"sentiment_label":"UNAVAILABLE","top_drivers":[]}
   agent: sentiment_agent
 
@@ -40,9 +44,15 @@ valuation_task:
     VALUATION_CONTEXT_UNAVAILABLE. Do not use undervalued, overvalued, fair
     value, or similar claims unless the valuation tool provides them.
   expected_output: >
-    ValuationAgentOutput JSON with valuation_label, valuation_drivers,
-    confidence, missing_fields, limitations, and source_refs. Return only valid
-    JSON with no markdown fences. Example:
+    ValuationAgentOutput JSON with status, summary, confidence,
+    valuation_label, valuation_drivers, missing_fields, limitations, and
+    source_refs. The summary and confidence fields are required. Do not return
+    raw fundamentals as top-level fields. Forbidden top-level fields include
+    pe_ratio, pb_ratio, debt_to_equity, dividend_yield, market_cap,
+    revenue_growth_yoy, and source. If you need to mention raw valuation values,
+    put them as strings inside valuation_drivers and cite source_refs. Return
+    only valid JSON with exactly the allowed schema fields and no markdown
+    fences. Example:
     {"status":"SUCCESS","summary":"Valuation was assessed only from FundamentalsTool snapshots.","confidence":0.58,"missing_fields":[],"limitations":[],"source_refs":["spark.gold.fundamentals:AAPL"],"valuation_label":"FAIRLY_VALUED","valuation_drivers":["AAPL pe_ratio=31.2"]}
   agent: valuation_agent
 
@@ -56,9 +66,10 @@ risk_task:
     Return risk_label, risk_factors, and confidence_cap. Do not silently assume
     moderate risk when risk data is missing.
   expected_output: >
-    RiskAgentOutput JSON with risk_label, risk_factors, confidence_cap,
-    missing_fields, limitations, and source_refs. Return only valid JSON with
-    no markdown fences. Example:
+    RiskAgentOutput JSON with status, summary, confidence, risk_label,
+    risk_factors, confidence_cap, missing_fields, limitations, and source_refs.
+    The summary field is required. Return only valid JSON with no markdown
+    fences. Example:
     {"status":"SUCCESS","summary":"Risk was summarized from RiskFeatureTool and portfolio constraints.","confidence":0.78,"missing_fields":[],"limitations":[],"source_refs":["postgresql.risk_features:AAPL"],"risk_label":"MEDIUM","risk_factors":["large-cap technology concentration"],"confidence_cap":0.78}
   agent: risk_agent
 
