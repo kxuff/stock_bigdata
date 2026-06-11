@@ -128,7 +128,12 @@ def test_hierarchical_crew_uses_custom_manager_and_specialist_tools(monkeypatch)
     ]
     assert [len(agent.tools) for agent in artifacts.specialist_agents] == [2, 1, 1, 2]
     assert len(artifacts.tasks) == 5
-    assert getattr(artifacts.tasks[2], "output_pydantic", None).__name__ == "ValuationAgentOutput"
+    assert [getattr(task, "output_pydantic", None).__name__ for task in artifacts.tasks[:4]] == [
+        "MarketDataAgentOutput",
+        "SentimentAgentOutput",
+        "ValuationAgentOutput",
+        "RiskAgentOutput",
+    ]
     assert "Return only valid JSON" in artifacts.tasks[-1].expected_output
     assert artifacts.tasks[-1].context == artifacts.tasks[:4]
     assert artifacts.crew.inputs is not None

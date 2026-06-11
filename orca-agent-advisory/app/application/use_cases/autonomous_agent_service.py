@@ -7,6 +7,7 @@ from app.application.ports.tool_result_provider import ToolResultProvider
 from app.application.use_cases.advisory_decision_service import AdvisoryDecisionService
 from app.application.use_cases.route_services import AgentRouteServices
 from app.application.use_cases.streaming_route_services import StreamingRouteServices
+from app.infrastructure.crewai.route_crew_runner import RouteCrewRunner
 from app.schemas.agent import AgentQueryRequest, AgentQueryResponse
 from app.schemas.enums import AgentRoute, DecisionMode, InvestmentHorizon, RiskTolerance
 from app.schemas.request import AdvisoryDecisionRequest, UserContext
@@ -19,6 +20,7 @@ class AutonomousAgentService:
     advisory_service: AdvisoryDecisionService
     tool_result_provider: ToolResultProvider
     streaming_route_services: StreamingRouteServices | None = None
+    route_crew_runner: RouteCrewRunner | None = None
 
     def query(self, request: AgentQueryRequest) -> AgentQueryResponse:
         routed = self.router.route(request)
@@ -41,16 +43,26 @@ class AutonomousAgentService:
             )
             tool_results = self.tool_result_provider.get_tool_results(advisory_request)
             decision = self.advisory_service.decide(advisory_request, tool_results)
-            return AgentQueryResponse(route=routed.route, status="immediate", message=routed.message, symbols=routed.symbols, result_type="single_symbol_decision", result=decision.model_dump(mode="json"), suggested_actions=routed.suggested_actions, router_confidence=routed.confidence)
+            return AgentQueryResponse(route=routed.route, status="immediate", message=decision.summary, symbols=routed.symbols, result_type="single_symbol_decision", result=decision.model_dump(mode="json"), suggested_actions=routed.suggested_actions, router_confidence=routed.confidence)
         if routed.route == AgentRoute.SYMBOL_COMPARISON:
+            if self.route_crew_runner is not None:
+                return self.route_crew_runner.run(request, routed)
             return self.route_services.symbol_comparison(routed)
         if routed.route == AgentRoute.WATCHLIST_REVIEW:
+            if self.route_crew_runner is not None:
+                return self.route_crew_runner.run(request, routed)
             return self.route_services.watchlist_review(routed)
         if routed.route == AgentRoute.UNIVERSE_SCREEN:
+            if self.route_crew_runner is not None:
+                return self.route_crew_runner.run(request, routed)
             return self.route_services.universe_screen(routed)
         if routed.route == AgentRoute.MARKET_BRIEF:
+            if self.route_crew_runner is not None:
+                return self.route_crew_runner.run(request, routed)
             return self.route_services.market_brief(routed)
         if routed.route == AgentRoute.DATA_DIAGNOSTICS:
+            if self.route_crew_runner is not None:
+                return self.route_crew_runner.run(request, routed)
             return self.route_services.data_diagnostics(routed)
         if routed.route == AgentRoute.PORTFOLIO_REBALANCE:
             return self.route_services.portfolio_rebalance(request, routed)
@@ -60,6 +72,8 @@ class AutonomousAgentService:
             if routed.route == AgentRoute.STREAMING_PIPELINE_HEALTH:
                 return self.streaming_route_services.pipeline_health(routed)
             if routed.route == AgentRoute.STREAMING_FRESHNESS_CHECK:
+                if self.route_crew_runner is not None:
+                    return self.route_crew_runner.run(request, routed)
                 return self.streaming_route_services.freshness_check(routed)
             if routed.route == AgentRoute.STREAMING_ALERT_REVIEW:
                 return self.streaming_route_services.alert_review(routed)

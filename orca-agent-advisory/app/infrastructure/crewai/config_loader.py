@@ -18,6 +18,16 @@ def load_tasks_config() -> dict[str, dict[str, Any]]:
     return _load_yaml("tasks.yaml")
 
 
+@lru_cache
+def load_route_agents_config() -> dict[str, dict[str, Any]]:
+    return _load_yaml("route_agents.yaml")
+
+
+@lru_cache
+def load_route_tasks_config() -> dict[str, dict[str, Any]]:
+    return _load_yaml("route_tasks.yaml")
+
+
 def agent_config(name: str) -> dict[str, Any]:
     return dict(load_agents_config()[name])
 
@@ -28,6 +38,20 @@ def task_config(name: str) -> dict[str, Any]:
 
 def crewai_task_config(name: str) -> dict[str, Any]:
     config = task_config(name)
+    config.pop("agent", None)
+    return config
+
+
+def route_agent_config(name: str) -> dict[str, Any]:
+    return dict(load_route_agents_config()[name])
+
+
+def route_task_config(name: str) -> dict[str, Any]:
+    return dict(load_route_tasks_config()[name])
+
+
+def crewai_route_task_config(name: str) -> dict[str, Any]:
+    config = route_task_config(name)
     config.pop("agent", None)
     return config
 

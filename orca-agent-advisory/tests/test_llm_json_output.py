@@ -6,6 +6,7 @@ import pytest
 
 from app.config import load_settings
 from app.infrastructure.llm.llm_factory import CrewAIUnavailableError, create_llm
+from app.infrastructure.llm.agent_route_planner import _parse_json as parse_route_json
 from app.schemas.decision import SingleSymbolDecision
 from app.validators.output_repair import JsonOutputParseError, parse_json_object, parse_model_output
 
@@ -25,6 +26,12 @@ def test_parse_json_object_extracts_first_object_from_text() -> None:
     raw = 'Final answer:\n{"status": "ok", "confidence": 0.8}\nDone.'
 
     assert parse_json_object(raw) == {"status": "ok", "confidence": 0.8}
+
+
+def test_route_json_parser_extracts_object_from_text() -> None:
+    assert parse_route_json('Route result:\n{"route":"single_symbol_advisory"}\nDone') == {
+        "route": "single_symbol_advisory"
+    }
 
 
 def test_parse_model_output_validates_pydantic_contract() -> None:

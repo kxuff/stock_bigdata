@@ -56,7 +56,7 @@ def test_load_settings_uses_docker_llm_base_url(monkeypatch: pytest.MonkeyPatch)
     settings = load_settings()
 
     assert settings.llm_provider == "litellm"
-    assert settings.llm_model == "openai/oc/deepseek-v4-flash-free"
+    assert settings.llm_model == "gpt-4o-mini"
     assert settings.llm_base_url == "https://example.test/v1"
     assert settings.llm_api_key is None
 

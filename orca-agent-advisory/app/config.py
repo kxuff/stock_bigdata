@@ -64,6 +64,7 @@ class AgentSettings(BaseModel):
 
 def load_settings() -> AgentSettings:
     return AgentSettings(
+        llm_model=_read_env("LLM_MODEL") or AgentSettings.model_fields["llm_model"].default,
         llm_base_url=_read_env("LLM_BASE_URL") or AgentSettings.model_fields["llm_base_url"].default,
         llm_api_key=_read_secret_env("NINEROUTER_KEY"),
         agent_temperature=_read_float_env("AGENT_TEMPERATURE") or AgentSettings.model_fields["agent_temperature"].default,

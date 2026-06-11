@@ -14,6 +14,7 @@ from app.infrastructure.bigdata.backtest_provider import IcebergSparkBacktestPro
 from app.infrastructure.bigdata.market_screen_provider import BigdataMarketScreenProvider
 from app.infrastructure.bigdata.streaming_providers import KafkaTopicMetadataInspectionProvider, SparkStreamingProvider
 from app.infrastructure.crewai.crew_runner import HierarchicalCrewRunner
+from app.infrastructure.crewai.route_crew_runner import RouteCrewRunner
 from app.infrastructure.llm.agent_route_planner import LiteLLMAgentRoutePlanner
 from app.infrastructure.storage.output_store import DecisionOutputStore
 
@@ -86,6 +87,16 @@ def build_streaming_route_services(settings: AgentSettings | None = None) -> Str
     )
 
 
+def build_route_crew_runner(settings: AgentSettings | None = None) -> RouteCrewRunner:
+    resolved = settings or load_settings()
+    return RouteCrewRunner(
+        market_screen_provider=build_market_screen_provider(resolved),
+        streaming_observability_provider=build_streaming_provider(resolved),
+        settings=resolved,
+        verbose=resolved.crewai_verbose,
+    )
+
+
 def build_autonomous_agent_service(settings: AgentSettings | None = None) -> AutonomousAgentService:
     resolved_settings = settings or load_settings()
     return AutonomousAgentService(
@@ -94,4 +105,5 @@ def build_autonomous_agent_service(settings: AgentSettings | None = None) -> Aut
         advisory_service=build_decision_service(resolved_settings),
         tool_result_provider=build_tool_result_provider(resolved_settings),
         streaming_route_services=build_streaming_route_services(resolved_settings),
+        route_crew_runner=build_route_crew_runner(resolved_settings),
     )
