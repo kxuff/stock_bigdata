@@ -6,6 +6,7 @@ from app.config import AgentSettings
 from app.infrastructure.crewai.agents import data_agent, manager_agent, risk_agent, sentiment_agent, valuation_agent
 from app.infrastructure.crewai import crew_runner
 from app.infrastructure.crewai.crew_runner import HierarchicalCrewRunner
+from app.infrastructure.crewai.crews import advisory_crew
 from app.infrastructure.crewai.tasks import data_tasks, manager_tasks, risk_tasks, sentiment_tasks, valuation_tasks
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle
@@ -82,6 +83,8 @@ class FakeCrew:
         self.tracing = tracing
         self.share_crew = share_crew
         self.inputs: dict[str, Any] | None = None
+        self.before_kickoff_callbacks: list[Any] = []
+        self.after_kickoff_callbacks: list[Any] = []
 
     def kickoff(self, inputs: dict[str, Any]) -> str:
         self.inputs = inputs
@@ -99,8 +102,8 @@ def test_hierarchical_crew_uses_custom_manager_and_specialist_tools(monkeypatch)
     monkeypatch.setattr(valuation_tasks, "CrewTask", FakeTask)
     monkeypatch.setattr(risk_tasks, "CrewTask", FakeTask)
     monkeypatch.setattr(manager_tasks, "CrewTask", FakeTask)
-    monkeypatch.setattr(crew_runner, "Crew", FakeCrew)
-    monkeypatch.setattr(crew_runner, "Process", FakeProcess)
+    monkeypatch.setattr(advisory_crew, "Crew", FakeCrew)
+    monkeypatch.setattr(advisory_crew, "Process", FakeProcess)
 
     request = AdvisoryDecisionRequest.model_validate(load_sample("normal_request.json"))
     bundle = ToolResultBundle.model_validate(load_sample("normal_tool_results.json"))

@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from datetime import date
+from datetime import datetime, timezone
+import os
 from typing import Any
 
 from app.application.ports.backtest_provider import BacktestProvider, BacktestRequest
@@ -192,13 +194,32 @@ def _warnings(row: dict[str, Any]) -> list[str]:
     warnings: list[str] = []
     if _symbol(row) == "":
         warnings.append("missing symbol")
-    if _first_present(row, "freshness", "as_of", "Datetime") is None:
+    freshness = _first_present(row, "freshness", "as_of", "Datetime")
+    if freshness is None:
         warnings.append("missing as_of")
+    elif _is_stale_timestamp(freshness):
+        warnings.append(f"stale data: latest row is {freshness}")
     if _first_present(row, "latest_price", "Close") is None:
         warnings.append("missing latest_price")
     if row.get("final_score") is None:
         warnings.append("missing final_score")
     return warnings
+
+
+def _is_stale_timestamp(value: Any) -> bool:
+    try:
+        max_age_seconds = int(os.getenv("ORCA_CONTEXT_MAX_AGE_SECONDS", "259200"))
+    except ValueError:
+        max_age_seconds = 259200
+    if max_age_seconds <= 0:
+        return False
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed).total_seconds() > max_age_seconds
 
 
 def _float(value: Any) -> float | None:

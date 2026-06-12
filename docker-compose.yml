@@ -373,7 +373,7 @@ services:
       - ./orca-agent-advisory/.env
     environment:
       LLM_PROVIDER: litellm
-      LLM_MODEL: openai/cx/gpt-5.4-mini
+      LLM_MODEL: openai/cx/gpt-5.4
       LLM_BASE_URL: http://host.docker.internal:20128/v1
       AGENT_TEMPERATURE: "1"
       ORCA_TOOL_RESULT_PROVIDER: bigdata
@@ -388,7 +388,7 @@ services:
       ORCA_CURATED_PRICE_TABLE: curated.us_stock_eod_prices
       ORCA_SENTIMENT_TABLE: ml_ready.stock_sentiment_context
       ORCA_VALUATION_TABLE: ml_ready.stock_valuation_context
-      ORCA_CONTEXT_MAX_AGE_SECONDS: "86400"
+      ORCA_CONTEXT_MAX_AGE_SECONDS: "99999999"
       ORCA_DECISION_JOB_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/stock_db
       ORCA_REDIS_URL: redis://redis:6379/0
       CREWAI_TRACING_ENABLED: "false"
@@ -419,7 +419,7 @@ services:
       - ./orca-agent-advisory/.env
     environment:
       LLM_PROVIDER: litellm
-      LLM_MODEL: openai/cx/gpt-5.4-mini
+      LLM_MODEL: openai/cx/gpt-5.4
       LLM_BASE_URL: http://host.docker.internal:20128/v1
       AGENT_TEMPERATURE: "1"
       ORCA_TOOL_RESULT_PROVIDER: bigdata
@@ -434,7 +434,7 @@ services:
       ORCA_CURATED_PRICE_TABLE: curated.us_stock_eod_prices
       ORCA_SENTIMENT_TABLE: ml_ready.stock_sentiment_context
       ORCA_VALUATION_TABLE: ml_ready.stock_valuation_context
-      ORCA_CONTEXT_MAX_AGE_SECONDS: "86400"
+      ORCA_CONTEXT_MAX_AGE_SECONDS: "99999999"
       ORCA_DECISION_JOB_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/stock_db
       ORCA_REDIS_URL: redis://redis:6379/0
       CREWAI_TRACING_ENABLED: "false"

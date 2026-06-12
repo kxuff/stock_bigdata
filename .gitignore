@@ -8,3 +8,6 @@ data/eod_batch
 airflow/logs
 
 test/
+docs/
+airflow/logs/dag_processor_manager/dag_processor_manager.log
+airflow/logs/scheduler/latest

@@ -32,10 +32,7 @@ def inject() -> None:
 
 .stApp {
   font-family: 'Inter', sans-serif;
-  background:
-    radial-gradient(ellipse at 10% 5%,  rgba(20,184,166,0.18) 0%, transparent 40%),
-    radial-gradient(ellipse at 90% 15%, rgba(34,211,238,0.14) 0%, transparent 40%),
-    linear-gradient(160deg, #020617 0%, #06111e 50%, #0f172a 100%);
+  background: #0e1117;
 }
 
 /* ── Sidebar ── */

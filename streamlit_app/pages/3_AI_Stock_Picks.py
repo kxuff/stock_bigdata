@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from components.styles import inject_global_styles
 from services.backtest_api import DEFAULT_SYMBOLS, build_equity_figure, run_strategy_backtest
 from services.ml_inference_api import (
     MAX_RISK_PROB_PCT,
@@ -15,6 +16,7 @@ from services.ml_inference_api import (
 
 
 st.set_page_config(page_title="AI Stock Picks", page_icon="⭐", layout="wide")
+inject_global_styles()
 BACKTEST_CACHE_VERSION = "cr_metric_v2"
 
 st.markdown("""

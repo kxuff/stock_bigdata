@@ -1,19 +1,20 @@
 from typing import Any, cast
 
-from app.infrastructure.crewai.agents.data_agent import create_market_data_agent
-from app.infrastructure.crewai.agents.risk_agent import create_risk_agent
-from app.infrastructure.crewai.agents.sentiment_agent import create_sentiment_agent
-from app.infrastructure.crewai.agents.valuation_agent import create_valuation_agent
-from app.infrastructure.crewai.tasks.data_tasks import create_market_data_task
-from app.infrastructure.crewai.tasks.risk_tasks import create_risk_task
-from app.infrastructure.crewai.tasks.sentiment_tasks import create_sentiment_task
-from app.infrastructure.crewai.tasks.valuation_tasks import create_valuation_task
-
 from crewai import Crew, Process
 from crewai.project import CrewBase as CrewBaseDecorator
 from crewai.project import agent as crew_agent_decorator
 from crewai.project import crew as crew_decorator
 from crewai.project import task as crew_task_decorator
+
+from app.infrastructure.crewai.agents.data_agent import create_market_data_agent
+from app.infrastructure.crewai.agents.risk_agent import create_risk_agent
+from app.infrastructure.crewai.agents.sentiment_agent import create_sentiment_agent
+from app.infrastructure.crewai.agents.valuation_agent import create_valuation_agent
+from app.infrastructure.crewai.tasks.data_tasks import create_market_data_task
+from app.infrastructure.crewai.tasks.manager_tasks import create_manager_synthesis_task
+from app.infrastructure.crewai.tasks.risk_tasks import create_risk_task
+from app.infrastructure.crewai.tasks.sentiment_tasks import create_sentiment_task
+from app.infrastructure.crewai.tasks.valuation_tasks import create_valuation_task
 
 CrewBase = cast(Any, CrewBaseDecorator)
 agent = cast(Any, crew_agent_decorator)
@@ -22,11 +23,13 @@ task = cast(Any, crew_task_decorator)
 
 
 @CrewBase
-class AdvisorySpecialistCrew:
-    """CrewAI-native specialist crew using YAML-backed agent and task config."""
+class AdvisoryHierarchicalCrew:
+    """Hierarchical crew: manager agent orchestrates 4 specialist agents.
 
-    agents_config = "../config/agents.yaml"
-    tasks_config = "../config/tasks.yaml"
+    Manager is NOT in agents= list — it is specified via manager_agent= on Crew,
+    which is the correct pattern for Process.hierarchical. The manager receives
+    all specialist task outputs and produces the final synthesis automatically.
+    """
 
     def __init__(
         self,
@@ -35,15 +38,17 @@ class AdvisorySpecialistCrew:
         tools: dict[str, Any],
         manager_agent: Any,
         verbose: bool = False,
+        tracing: bool = False,
+        share_crew: bool = False,
     ) -> None:
         self.llm = llm
         self.tools = tools
         self._manager_agent = manager_agent
         self.verbose = verbose
+        self.tracing = tracing
+        self.share_crew = share_crew
 
-    @agent
-    def manager_agent(self) -> Any:
-        return self._manager_agent
+    # --- Specialist agents (manager is NOT decorated here) ---
 
     @agent
     def market_data_agent(self) -> Any:
@@ -77,6 +82,8 @@ class AdvisorySpecialistCrew:
             verbose=self.verbose,
         )
 
+    # --- Specialist tasks with explicit agent assignments ---
+
     @task
     def market_data_task(self) -> Any:
         return create_market_data_task(self.market_data_agent())
@@ -93,29 +100,27 @@ class AdvisorySpecialistCrew:
     def risk_task(self) -> Any:
         return create_risk_task(self.risk_agent())
 
+    @task
+    def manager_synthesis_task(self) -> Any:
+        return create_manager_synthesis_task(
+            specialist_tasks=[
+                self.market_data_task(),
+                self.sentiment_task(),
+                self.valuation_task(),
+                self.risk_task(),
+            ],
+        )
+
+    # --- Hierarchical crew: manager_agent= keeps manager out of agents list ---
+
     @crew
     def crew(self) -> Any:
         return Crew(
-            agents=self.specialist_agents(),
-            tasks=self.specialist_tasks(),
-            manager_agent=self._manager_agent,
+            agents=self.agents,
+            tasks=self.tasks,
             process=Process.hierarchical,
+            manager_agent=self._manager_agent,
             verbose=self.verbose,
+            tracing=self.tracing,
+            share_crew=self.share_crew,
         )
-
-    def specialist_agents(self) -> list[Any]:
-        return [
-            self.market_data_agent(),
-            self.sentiment_agent(),
-            self.valuation_agent(),
-            self.risk_agent(),
-        ]
-
-    def specialist_tasks(self) -> list[Any]:
-        return [
-            self.market_data_task(),
-            self.sentiment_task(),
-            self.valuation_task(),
-            self.risk_task(),
-        ]
-

@@ -1,15 +1,27 @@
 route_symbol_comparison_task:
   description: >
     User query: {user_query}. Symbols: {symbols}. Call SymbolLoadTool with
-    {symbols}. Rank requested symbols by final_score and explain strongest and
-    weakest using returned metrics only. Include final_score, latest_price,
-    RSI14, RVOL20, risk_prob, as_of, and warnings where available. Do not use
-    external data. If a symbol is missing, state it as a limitation.
+    {symbols}; use the returned warehouse rows as the authoritative data for
+    ranking, dates, prices, scores, momentum, trading activity, model risk,
+    warnings, and result rows.
+    Rank requested symbols by overall ORCA signal quality, not by one metric in
+    isolation. Use score, model risk, momentum, trading activity, sentiment, and
+    news drivers together. Do not use FreshnessTool for this route. Write as an
+    informative advisor: explain what each stock's setup means, why the top name
+    leads, what could invalidate the view, and what a user should monitor next.
+    Use plain English and avoid a metric dump. Mention exact metrics only when
+    they clarify the reasoning. Avoid raw schema names such as final_score,
+    risk_prob, RSI14, RVOL20, and as_of in the user-facing message; translate
+    them into natural language. If returned rows include old data dates or
+    warnings, make that limitation prominent before any recommendation. Do not
+    use external data. If a symbol is missing, state it as a limitation.
   expected_output: >
     RouteAgentResponseOutput JSON with message, result_type="symbol_comparison",
     result containing rows, source_refs, and limitations. The message must be
-    under 180 words, cite concrete fields, be actionable, and include "Not
-    financial advice." Return JSON only with no markdown fences.
+    2-4 short paragraphs or bullets, include a ranked view, explain the why in
+    advisor language, call out data freshness when dates/warnings are present,
+    be actionable, and include "Not financial advice." Return JSON only with no
+    markdown fences.
   agent: route_response_agent
 
 route_watchlist_review_task:
@@ -42,14 +54,12 @@ route_universe_screen_task:
 route_market_brief_task:
   description: >
     User query: {user_query}. Interpret the user's requested market brief from
-    this exact query. Grounded market rows JSON: {market_screen_json}. Use this
-    JSON as the authoritative market data for the user-facing message and result;
-    call MarketScreenTool only if this JSON is empty or unusable.
-    If tool use is needed, choose the MarketScreenTool input from the user's intent:
+    this exact query. Call MarketScreenTool to fetch current warehouse-backed
+    ORCA market rows. Choose the MarketScreenTool input from the user's intent:
     if they ask for a specific count (for example top 10, 10 stocks, ten names),
-    call MarketScreenTool with that count; otherwise use 5. Keep tool input
+    call MarketScreenTool with that count; otherwise use 10. Keep tool input
     reasonable for chat responses (1 to 20). Summarize current ORCA market
-    leaders, risks, and news themes from grounded rows or tool data only. Write for a normal
+    leaders, risks, and news themes from tool data only. Write for a normal
     investor, not a quant dashboard. Avoid raw field names such as final_score,
     risk_prob, RSI14, RVOL20, pred_a, r1/r3/r5. Convert scores on a 0..1 scale
     into plain language or /100 only when useful. Explain what signals mean:
@@ -79,13 +89,11 @@ route_market_brief_task:
 route_top_stocks_task:
   description: >
     User query: {user_query}. Interpret the user's requested ranked top-stocks
-    list from this exact query. Grounded market rows JSON: {market_screen_json}.
-    Use this JSON as the authoritative ranked stock list for the user-facing
-    message and result; call MarketScreenTool only if this JSON is empty or
-    unusable. If tool use is needed, choose the MarketScreenTool input from the
-    user's requested count (for example top 10, 10 stocks, ten names); otherwise
+    list from this exact query. Call MarketScreenTool to fetch current
+    warehouse-backed ORCA market rows. Choose the MarketScreenTool input from
+    the user's requested count (for example top 10, 10 stocks, ten names); otherwise
     use 10. Keep tool input reasonable for chat responses (1 to 20). Use only
-    grounded rows or tool data. Write a concise ranked list in natural language. Avoid raw field
+    tool data. Write a concise ranked list in natural language. Avoid raw field
     names such as final_score, risk_prob, RSI14, RVOL20, pred_a, r1/r3/r5.
     Convert scores on a 0..1 scale into /100 only when useful. Explain why each
     name is interesting in plain English using price action, risk, sentiment,

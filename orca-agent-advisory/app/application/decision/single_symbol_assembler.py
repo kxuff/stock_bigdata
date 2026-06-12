@@ -84,7 +84,7 @@ def assemble_single_symbol_decision(
         supporting_signals=synthesis.supporting_signals,
         conflicting_signals=unique([*synthesis.conflicting_signals, *conflict.conflicting_signals]),
         conflict_level=conflict.conflict_level,
-        risk_warnings=unique([*synthesis.risk_warnings, *agent_outputs.risk_agent.risk_factors]),
+        risk_warnings=unique(synthesis.risk_warnings),
         limitations=collect_limitations(agent_outputs, synthesis, source_quality_assessment.quality_warnings),
         source_quality=source_quality_assessment.source_quality,
     )

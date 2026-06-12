@@ -1,5 +1,8 @@
 import json
+import os
+from datetime import UTC, datetime
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from app.application.specialists import analyze_market_data
@@ -8,7 +11,7 @@ from app.application.specialists import analyze_sentiment
 from app.application.specialists import analyze_valuation
 from app.infrastructure.crewai.agents.manager_agent import create_manager_agent
 from app.config import AgentSettings, load_settings
-from app.infrastructure.crewai.crews.advisory_crew import AdvisorySpecialistCrew
+from app.infrastructure.crewai.crews.advisory_crew import AdvisoryHierarchicalCrew
 from app.application.ports.crew_orchestrator import CrewOrchestratedOutputs
 from app.infrastructure.llm.llm_factory import create_llm
 from app.schemas.agent_outputs import (
@@ -20,11 +23,10 @@ from app.schemas.agent_outputs import (
 )
 from app.schemas.request import AdvisoryDecisionRequest
 from app.schemas.tool_results import ToolResultBundle
-from app.infrastructure.crewai.tasks.manager_tasks import create_manager_synthesis_task
 from app.validators.output_repair import parse_model_output
 
-from crewai import Crew, Process
 from crewai.tools import BaseTool
+from pydantic import BaseModel, Field
 
 
 @dataclass
@@ -71,7 +73,7 @@ class HierarchicalCrewRunner:
         tool_results: ToolResultBundle,
     ) -> CrewRunArtifacts:
         llm = self.llm_factory(self.settings)
-        tools = build_mocked_upstream_tools(tool_results)
+        tools = build_mocked_upstream_tools(tool_results, request.symbols)
 
         manager_agent = create_manager_agent(
             llm=llm,
@@ -79,57 +81,55 @@ class HierarchicalCrewRunner:
             max_execution_time=self.settings.agent_timeout_seconds,
         )
 
-        specialist_crew = AdvisorySpecialistCrew(
+        crew_inst = AdvisoryHierarchicalCrew(
             llm=llm,
             tools=tools,
             manager_agent=manager_agent,
             verbose=self.verbose,
-        )
-        specialist_agents = specialist_crew.specialist_agents()
-        specialist_tasks = specialist_crew.specialist_tasks()
-        tasks = specialist_tasks + [_build_manager_task(request, specialist_tasks)]
-        crew = Crew(
-            agents=specialist_agents,
-            tasks=tasks,
-            manager_agent=manager_agent,
-            process=Process.hierarchical,
-            verbose=self.verbose,
             tracing=self.settings.crewai_tracing,
             share_crew=self.settings.crewai_share_crew,
         )
+        assembled_crew = crew_inst.crew()
 
         artifacts = CrewRunArtifacts(
             manager_agent=manager_agent,
-            specialist_agents=specialist_agents,
-            tasks=tasks,
-            crew=crew,
+            specialist_agents=list(crew_inst.agents),
+            tasks=list(crew_inst.tasks),
+            crew=assembled_crew,
         )
         self.last_artifacts = artifacts
         return artifacts
 
 
-def build_mocked_upstream_tools(tool_results: ToolResultBundle) -> dict[str, Any]:
+def build_mocked_upstream_tools(
+    tool_results: ToolResultBundle,
+    symbols: list[str] | None = None,
+) -> dict[str, Any]:
+    request_symbols: list[str] = symbols or []
     return {
         "market_features": _StaticTool(
-            name="MarketFeatureTool",
-            description="Read-only mocked market feature snapshot lookup.",
+            name="market_feature",
+            description="Read-only market feature snapshot lookup for requested symbols. Input: symbol such as AAPL.",
             bundle_field="market_features",
             tool_results=tool_results,
+            request_symbols=request_symbols,
         ),
         "ml_predictions": _StaticTool(
-            name="MlPredictionTool",
-            description="Read-only mocked machine learning prediction lookup.",
+            name="ml_prediction",
+            description="Read-only machine learning prediction lookup for requested symbols. Input: symbol such as AAPL.",
             bundle_field="ml_predictions",
             tool_results=tool_results,
+            request_symbols=request_symbols,
         ),
         "sentiment_snapshot": _StaticTool(
-            name="NewsSentimentTool",
-            description="Read-only mocked news sentiment snapshot lookup.",
+            name="news_sentiment",
+            description="Read-only news sentiment snapshot lookup for requested symbols. Input: symbol such as AAPL.",
             bundle_field="sentiment_snapshot",
             tool_results=tool_results,
+            request_symbols=request_symbols,
         ),
         "valuation_snapshot": _StaticTool(
-            name="FundamentalsTool",
+            name="fundamentals",
             description=(
                 "Read-only valuation snapshot lookup. Tool output is evidence, "
                 "not the final response schema. Final valuation_task output must "
@@ -139,50 +139,105 @@ def build_mocked_upstream_tools(tool_results: ToolResultBundle) -> dict[str, Any
             ),
             bundle_field="valuation_snapshot",
             tool_results=tool_results,
+            request_symbols=request_symbols,
         ),
         "risk_snapshot": _StaticTool(
-            name="RiskFeatureTool",
-            description="Read-only mocked risk feature lookup.",
+            name="risk_feature",
+            description="Read-only risk feature lookup for requested symbols. Input: symbol such as AAPL.",
             bundle_field="risk_snapshot",
             tool_results=tool_results,
+            request_symbols=request_symbols,
         ),
         "portfolio_snapshot": _StaticTool(
-            name="PortfolioTool",
-            description="Read-only mocked portfolio snapshot lookup.",
+            name="portfolio_snapshot",
+            description="Read-only portfolio snapshot lookup. Input: optional symbol or empty string.",
             bundle_field="portfolio_snapshot",
             tool_results=tool_results,
+            request_symbols=request_symbols,
         ),
     }
+
+
+class StaticToolInput(BaseModel):
+    symbol: str = Field(default="", description="Ticker symbol to retrieve, e.g. AAPL. Leave empty for portfolio-level tools.")
 
 
 class _StaticTool(BaseTool):
     name: str
     description: str
+    args_schema: type[BaseModel] = StaticToolInput
     bundle_field: str
     tool_results: ToolResultBundle
+    request_symbols: list[str]
 
-    def _run(self, query: str = "") -> str:
+    def _run(self, symbol: str = "") -> str:
         result = getattr(self.tool_results, self.bundle_field)
         if result is None:
-            return json.dumps(
+            payload = json.dumps(
                 {
                     "tool": self.name,
                     "status": "UNAVAILABLE",
-                    "query": query,
+                    "symbol": symbol,
                     "error_message": f"{self.bundle_field} was not provided",
                 }
             )
-        return result.model_dump_json()
+            _append_tool_trace(self.name, self.bundle_field, symbol, payload)
+            return payload
+        payload = _filtered_tool_payload(result, symbol or "")
+        payload = _inject_trace_marker(payload, self.name)
+        _append_tool_trace(self.name, self.bundle_field, symbol, payload)
+        return payload
 
 
-def _build_manager_task(
-    request: AdvisoryDecisionRequest,
-    specialist_tasks: list[Any],
-) -> Any:
-    return create_manager_synthesis_task(
-        request,
-        specialist_tasks,
-    )
+def _filtered_tool_payload(result: Any, symbol: str) -> str:
+    payload = result.model_dump(mode="json")
+    data = payload.get("data")
+    if isinstance(data, dict):
+        requested = symbol.strip().upper()
+        if requested:
+            payload["data"] = {requested: data[requested]} if requested in data else {}
+        elif len(data) == 1:
+            payload["data"] = data
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
+def _inject_trace_marker(result_json: str, tool_name: str) -> str:
+    marker = os.getenv("ORCA_CREWAI_TRACE_MARKER", "ORCA_TOOL_SEEN_MARKER")
+    try:
+        payload = json.loads(result_json)
+    except json.JSONDecodeError:
+        return result_json
+    if isinstance(payload, dict):
+        payload["trace_marker"] = f"{marker}:{tool_name}"
+        refs = payload.get("source_refs")
+        if isinstance(refs, list):
+            payload["source_refs"] = [f"TRACE_MARKER:{marker}:{tool_name}", *refs]
+        return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    return result_json
+
+
+def _append_tool_trace(tool_name: str, bundle_field: str, query: str, result_json: str) -> None:
+    trace_path = Path("/tmp/orca_crewai_tool_calls.jsonl")
+    try:
+        parsed = json.loads(result_json)
+    except json.JSONDecodeError:
+        parsed = None
+    entry = {
+        "ts": datetime.now(UTC).isoformat(),
+        "tool": tool_name,
+        "bundle_field": bundle_field,
+        "query": query,
+        "result_len": len(result_json),
+        "result_status": parsed.get("status") if isinstance(parsed, dict) else None,
+        "source_refs": parsed.get("source_refs") if isinstance(parsed, dict) else None,
+        "data_keys": sorted((parsed.get("data") or {}).keys()) if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict) else [],
+        "result_preview": result_json[:2000],
+    }
+    try:
+        with trace_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _extract_task_payload(task: Any | None) -> Any | None:

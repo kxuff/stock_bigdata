@@ -16,9 +16,7 @@ def _rec_cls(rec: str) -> str:
 
 
 def _rec_icon(rec: str) -> str:
-    return {"BUY": "↑", "SELL": "↓", "HOLD": "→", "WATCH": "◎"}.get(
-        str(rec).upper(), "•"
-    )
+    return ""
 
 
 def _conf_cls(conf) -> str:
@@ -40,9 +38,8 @@ def _conf_fmt(conf) -> str:
 
 def _signal_chips(signals: list, kind: str) -> str:
     cls = "support" if kind == "support" else "conflict"
-    icon = "✦" if kind == "support" else "✕"
     chips = "".join(
-        f'<span class="signal-chip {cls}">{icon} {s}</span>'
+        f'<span class="signal-chip {cls}">{s}</span>'
         for s in (signals or [])[:4]
     )
     return f'<div class="signal-row">{chips}</div>' if chips else ""
@@ -72,7 +69,7 @@ def render_decision(decision: dict) -> None:
   <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
     <div style="display:flex;align-items:center;gap:0.75rem;">
       <span style="font-size:1.6rem;font-weight:800;color:#e2e8f0;">{symbol}</span>
-      <span class="rec-badge {cls}">{icon} {rec}</span>
+      <span class="rec-badge {cls}">{rec}</span>
     </div>
     <span class="conf-pill {_conf_cls(conf)}">{_conf_fmt(conf)} confidence</span>
   </div>
@@ -82,7 +79,6 @@ def render_decision(decision: dict) -> None:
     if decision.get("requires_human_review"):
         st.markdown(
             '<div class="orca-alert orca-alert-warn">'
-            '<span class="orca-alert-icon">⚠️</span>'
             '<div>Human review required before any action.</div>'
             '</div>',
             unsafe_allow_html=True,
@@ -95,7 +91,6 @@ def render_decision(decision: dict) -> None:
         safe_summary = escape(str(summary)).replace("\n", "<br>")
         st.markdown(
             '<div class="orca-alert orca-alert-info">'
-            '<span class="orca-alert-icon">💬</span>'
             f'<div>{safe_summary}</div>'
             '</div>',
             unsafe_allow_html=True,
@@ -110,16 +105,16 @@ def render_decision(decision: dict) -> None:
             with col_a:
                 st.markdown("**What supports the call**")
                 for s in supporting[:5]:
-                    st.markdown(f"<div style='color:#6ee7b7;font-size:0.85rem;margin:.15rem 0'>• {s}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='color:#6ee7b7;font-size:0.85rem;margin:.15rem 0'>{s}</div>", unsafe_allow_html=True)
             with col_b:
                 st.markdown("**What could change the view**")
                 for s in conflicting[:5]:
-                    st.markdown(f"<div style='color:#fda4af;font-size:0.85rem;margin:.15rem 0'>• {s}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='color:#fda4af;font-size:0.85rem;margin:.15rem 0'>{s}</div>", unsafe_allow_html=True)
 
     # Rationale table
     rationale = [r for r in (decision.get("decision_rationale") or []) if isinstance(r, dict)]
     if rationale:
-        with st.expander("📊 Decision rationale", expanded=False):
+        with st.expander("Decision rationale", expanded=False):
             rows = []
             for r in rationale[:6]:
                 rows.append(
@@ -143,9 +138,9 @@ def render_decision(decision: dict) -> None:
     # Risk warnings
     warnings = decision.get("risk_warnings") or []
     if warnings:
-        with st.expander("⚠️ Risk warnings", expanded=False):
+        with st.expander("Risk warnings", expanded=False):
             for w in warnings:
-                st.markdown(f"<div style='color:#fda4af;font-size:0.85rem;margin:.15rem 0'>• {w}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='color:#fda4af;font-size:0.85rem;margin:.15rem 0'>{w}</div>", unsafe_allow_html=True)
 
     # Source quality + audit
     sq = decision.get("source_quality") or {}
@@ -194,17 +189,16 @@ def render_decision(decision: dict) -> None:
     tool_audit = decision.get("retrieved_tool_audit") or {}
     tool_calls = tool_audit.get("tool_calls") or []
     if tool_calls:
-        with st.expander("🔧 Tool audit", expanded=False):
+        with st.expander("Tool audit", expanded=False):
             for t in tool_calls:
                 status = t.get("status", "unknown")
-                icon_t = "✅" if status == "SUCCESS" else "❌"
-                st.markdown(f"`{icon_t} {t.get('tool', '?')}` — {status}")
+                st.markdown(f"`{t.get('tool', '?')}` — {status}")
 
     # Copy summary
     summary_text = (
         f"{symbol} · {rec} · confidence {_conf_fmt(conf)}\n\n{decision.get('summary', '')}"
     )
-    with st.expander("📋 Copy summary", expanded=False):
+    with st.expander("Copy summary", expanded=False):
         st.text_area(
             "Copyable summary",
             summary_text,
@@ -271,9 +265,9 @@ def _warn_expander(rows: list) -> None:
         for r in rows for w in (r.get("warnings") or [])
     ]
     if msgs:
-        with st.expander(f"⚠️ {len(msgs)} data warning(s)", expanded=True):
+        with st.expander(f"{len(msgs)} data warning(s)", expanded=True):
             for m in msgs[:20]:
-                st.markdown(f"<span style='color:#fcd34d;font-size:0.84rem'>• {m}</span>", unsafe_allow_html=True)
+                st.markdown(f"<span style='color:#fcd34d;font-size:0.84rem'>{m}</span>", unsafe_allow_html=True)
 
 
 def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
@@ -288,7 +282,7 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
 
     if rows_key is not None:
         if result_type == "market_brief" and result.get("summary"):
-            st.info(f"📈 {result['summary']}")
+            st.info(result["summary"])
         if result_type == "market_brief":
             _render_market_brief_sections(result)
         rows = result.get(rows_key) or []
@@ -301,7 +295,7 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
         if result_type == "universe_screen":
             diagnostics = result.get("diagnostics") or {}
             if diagnostics:
-                with st.expander("🔍 Diagnostics"):
+                with st.expander("Diagnostics"):
                     st.json(diagnostics)
         return
 
@@ -312,29 +306,28 @@ def _render_structured(result_type: str, result: dict) -> None:  # noqa: C901
     if result_type == "portfolio_rebalance":
         msg = result.get("message", "")
         if msg:
-            st.info(f"💬 {msg}")
+            st.info(msg)
         changes = result.get("changes") or []
         if changes:
             st.dataframe(changes, width=900, hide_index=True)
         c1, c2 = st.columns(2)
         c1.metric("Cash target %", f"{result.get('cash_target_weight', 0):.2f}%")
         c2.metric("Human review", "Required ✓" if result.get("human_review_required") else "Not required")
-        with st.expander("📐 Constraints"):
+        with st.expander("Constraints"):
             st.json(result.get("constraints") or {})
         return
 
     if result_type == "backtest_analysis":
         status = result.get("status", "planned")
-        icon = {"completed": "✅", "planned": "📋", "disabled": "🚫"}.get(status, "•")
-        st.info(f"{icon} {result.get('limitation') or 'Backtest service not connected.'}")
+        st.info(result.get('limitation') or 'Backtest service not connected.')
         if result.get("suggested_next_action"):
-            st.success(f"→ {result['suggested_next_action']}")
+            st.success(result["suggested_next_action"])
         metrics = result.get("metrics") or {}
         if metrics:
             cols = st.columns(len(metrics))
             for col, (k, v) in zip(cols, metrics.items()):
                 col.metric(k.replace("_", " ").title(), v)
-        with st.expander("📄 Backtest spec", expanded=True):
+        with st.expander("Backtest spec", expanded=True):
             st.json(result.get("backtest_spec") or {})
         return
 
@@ -380,6 +373,8 @@ def _render_market_brief_sections(result: dict) -> None:
     ]
     for title, key in sections:
         items = result.get(key) or []
+        if isinstance(items, str):
+            items = [s.strip() for s in items.splitlines() if s.strip()] or [items] if items.strip() else []
         if not items:
             continue
         st.markdown(f"**{title}**")
@@ -388,18 +383,23 @@ def _render_market_brief_sections(result: dict) -> None:
 
 
 def _display_rows(result_type: str, rows: list) -> list:
-    if result_type not in {"market_brief", "top_stocks"}:
+    friendly_types = {"symbol_comparison", "watchlist_review", "universe_screen", "market_brief", "top_stocks"}
+    if result_type not in friendly_types:
         return rows
-    cols = ["symbol", "Symbol", "final_score", "latest_price", "price", "RSI14", "RVOL20", "risk_prob"]
+    cols = ["rank", "symbol", "Symbol", "final_score", "latest_price", "price", "RSI14", "RVOL20", "risk_prob", "as_of", "status", "warnings"]
     labels = {
+        "rank": "Rank",
         "symbol": "Symbol",
         "Symbol": "Symbol",
-        "final_score": "ORCA Score",
+        "final_score": "Score",
         "latest_price": "Price",
         "price": "Price",
-        "RSI14": "RSI14",
-        "RVOL20": "RVOL20",
-        "risk_prob": "Risk Prob",
+        "RSI14": "Momentum (RSI)",
+        "RVOL20": "Trading Activity",
+        "risk_prob": "Model Risk",
+        "as_of": "Data Date",
+        "status": "Status",
+        "warnings": "Warnings",
     }
     display = []
     for row in rows:
@@ -414,13 +414,17 @@ def _display_rows(result_type: str, rows: list) -> list:
 
 
 def _fmt_cell(col: str, value):
+    if col == "warnings" and isinstance(value, list):
+        return "; ".join(str(item) for item in value)
     try:
         numeric = float(value)
     except (TypeError, ValueError):
         return value
     if col == "final_score" and numeric <= 1:
         return round(numeric * 100, 1)
-    if col in {"final_score", "latest_price", "price", "RSI14", "RVOL20", "risk_prob"}:
+    if col == "risk_prob":
+        return f"{numeric:.2%}"
+    if col in {"final_score", "latest_price", "price", "RSI14", "RVOL20"}:
         return round(numeric, 2)
     return value
 
@@ -430,7 +434,6 @@ def _fmt_cell(col: str, value):
 def render_empty(label: str = "No data returned.") -> None:
     st.markdown(f"""
 <div class="empty-state">
-  <div class="icon">📭</div>
   <p>{label}</p>
 </div>
 """, unsafe_allow_html=True)
@@ -441,7 +444,6 @@ def render_empty(label: str = "No data returned.") -> None:
 def render_chat_empty() -> None:
     st.markdown("""
 <div class="empty-state" style="padding:4rem 2rem;">
-  <div class="icon">🧠</div>
   <h3>Ask ORCA anything</h3>
   <p>Market brief, compare symbols, watchlist review, advisory decisions, portfolio rebalance — try a quick question below.</p>
 </div>
@@ -452,11 +454,11 @@ def render_chat_empty() -> None:
 
 def render_backend_pill(state: str, error: str | None = None) -> None:
     cfg = {
-        "Connected": ("dot-ok",      "🟢 Connected"),
-        "Degraded":  ("dot-warn",    "🟡 Degraded"),
-        "Offline":   ("dot-offline", "⚫ Offline"),
+        "Connected": ("dot-ok",      "Connected"),
+        "Degraded":  ("dot-warn",    "Degraded"),
+        "Offline":   ("dot-offline", "Offline"),
     }
-    dot_cls, label = cfg.get(state, ("dot-offline", f"• {state}"))
+    dot_cls, label = cfg.get(state, ("dot-offline", state))
     st.markdown(
         f'<span style="font-size:0.82rem;font-weight:600;">'
         f'<span class="status-dot {dot_cls}"></span>{label}</span>',
@@ -469,18 +471,17 @@ def render_backend_pill(state: str, error: str | None = None) -> None:
 # ── Job status row ────────────────────────────────────────────────────────────
 
 STATUS_ICON = {
-    "queued":    "🕓",
-    "running":   "🔄",
-    "completed": "✅",
-    "failed":    "❌",
-    "stale":     "⚠️",
+    "queued":    "",
+    "running":   "",
+    "completed": "",
+    "failed":    "",
+    "stale":     "",
 }
 
 
 def render_job_row(job: dict, status: str, cols) -> None:
-    icon = STATUS_ICON.get(status, "•")
     cols[0].markdown(f"**{job.get('symbol','N/A')}**")
-    cols[1].markdown(f"{icon} `{status}`")
+    cols[1].markdown(f"`{status}`")
     cols[2].caption(_truncate(job.get("prompt"), 52))
     cols[3].caption(job.get("created_at", "—")[:19] if job.get("created_at") else "—")
 

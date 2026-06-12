@@ -22,8 +22,8 @@ class AgentSettings(BaseModel):
     redis_url: str | None = None
     decision_job_queue: str = "orca-decision-jobs"
     crewai_verbose: bool = True
-    crewai_tracing: bool = True
-    crewai_share_crew: bool = True
+    crewai_tracing: bool = False
+    crewai_share_crew: bool = False
     tool_result_provider: str = "bigdata"
     kafka_bootstrap_servers: str | None = None
     kafka_allowed_topics: list[str] = Field(default_factory=list)

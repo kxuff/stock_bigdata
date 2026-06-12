@@ -18,13 +18,15 @@ class BigdataMarketScreenProvider:
         try:
             spark = _build_spark_session(SparkSession.builder, self.table_config.spark_app_name or "orca-market-screen-provider", self.table_config)
             p = spark.table(self.table_config.table_ref(self.table_config.prediction_table))
-            latest_date = p.agg(F.max("Datetime").alias("max_datetime")).collect()[0]["max_datetime"]
-            if latest_date is None:
+            if p.limit(1).count() == 0:
                 return []
-            window = Window.orderBy(F.col("final_score").desc_nulls_last())
+            latest_per_symbol = Window.partitionBy("Symbol").orderBy(F.col("Datetime").desc_nulls_last())
+            rank_by_score = Window.orderBy(F.col("final_score").desc_nulls_last())
             top = (
-                p.where(F.col("Datetime") == F.lit(latest_date))
-                .withColumn("rank", F.row_number().over(window))
+                p.withColumn("_symbol_rn", F.row_number().over(latest_per_symbol))
+                .where(F.col("_symbol_rn") == 1)
+                .drop("_symbol_rn")
+                .withColumn("rank", F.row_number().over(rank_by_score))
                 .where(F.col("rank") <= int(limit))
                 .limit(int(limit))
             )

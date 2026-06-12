@@ -17,5 +17,6 @@ def create_market_data_agent(
         tools=list(tools),
         verbose=verbose,
         allow_delegation=False,
+        max_iter=4,
+        max_execution_time=60,
     )
-

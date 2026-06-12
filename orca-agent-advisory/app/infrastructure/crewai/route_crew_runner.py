@@ -29,8 +29,7 @@ class RouteCrewRunner:
 
     def run(self, request: AgentQueryRequest, route: RoutedAgentQuery) -> AgentQueryResponse:
         llm = self.llm_factory(self.settings)
-        tools = self._tools()
-        grounded_market_rows = self._prefetch_market_screen_rows(request, route.route)
+        tools = self._tools(route.route)
         agent = CrewAgent(
             config=route_agent_config("route_response_agent"),
             llm=llm,
@@ -61,12 +60,13 @@ class RouteCrewRunner:
                 "risk_tolerance": request.context.risk_tolerance,
                 "investment_horizon": request.context.investment_horizon,
                 "portfolio_json": json.dumps(_portfolio_context(request), default=str),
-                "market_screen_json": json.dumps(grounded_market_rows, default=str),
             }
         )
         payload = _parse_payload(_extract_task_payload(task) or raw)
+        if route.route == AgentRoute.SYMBOL_COMPARISON:
+            payload = self._ground_symbol_comparison_payload(payload, route.symbols)
         if route.route in {AgentRoute.MARKET_BRIEF, AgentRoute.TOP_STOCKS}:
-            payload = self._ground_market_screen_payload(payload, request, route.route, grounded_market_rows)
+            payload = self._ground_market_screen_payload(payload, request, route.route)
         if route.route == AgentRoute.PORTFOLIO_REBALANCE:
             payload = self._ground_portfolio_rebalance_payload(payload, request)
         return AgentQueryResponse(
@@ -83,12 +83,32 @@ class RouteCrewRunner:
     def _ground_market_brief_payload(self, payload: RouteAgentResponseOutput, request: AgentQueryRequest) -> RouteAgentResponseOutput:
         return self._ground_market_screen_payload(payload, request, AgentRoute.MARKET_BRIEF)
 
-    def _prefetch_market_screen_rows(self, request: AgentQueryRequest, route: AgentRoute) -> list[dict[str, Any]]:
-        if route not in {AgentRoute.MARKET_BRIEF, AgentRoute.TOP_STOCKS}:
-            return []
-        default = 5 if route == AgentRoute.MARKET_BRIEF else 10
-        limit = _market_screen_limit(request.message, default=default)
-        return json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
+    def _ground_symbol_comparison_payload(self, payload: RouteAgentResponseOutput, symbols: list[str], grounded_rows: list[dict[str, Any]] | None = None) -> RouteAgentResponseOutput:
+        """Keep comparison rows source-backed; never trust agent-generated metrics/dates."""
+        rows = grounded_rows or json.loads(json.dumps(self.market_screen_provider.load_symbols(symbols), default=str))
+        ranked = sorted(rows, key=lambda row: row.get("final_score") or 0, reverse=True)
+        comparison_rows: list[dict[str, Any]] = []
+        for index, row in enumerate(ranked, start=1):
+            warnings = _row_warnings(row)
+            comparison_rows.append(
+                {
+                    "symbol": _row_symbol(row),
+                    "rank": index,
+                    "final_score": row.get("final_score"),
+                    "latest_price": row.get("latest_price") or row.get("Close"),
+                    "RSI14": row.get("RSI14"),
+                    "RVOL20": row.get("RVOL20"),
+                    "risk_prob": row.get("risk_prob"),
+                    "as_of": row.get("as_of") or row.get("Datetime"),
+                    "status": "warning" if warnings else "ok",
+                    "warnings": warnings,
+                }
+            )
+        payload.result_type = "symbol_comparison"
+        payload.result = {"rows": comparison_rows, "source_refs": [f"symbol_load_tool:{','.join(symbols)}"]}
+        if not _symbol_comparison_message_is_grounded(payload.message, comparison_rows):
+            payload.message = _symbol_comparison_message(comparison_rows)
+        return payload
 
     def _ground_market_screen_payload(
         self,
@@ -98,7 +118,7 @@ class RouteCrewRunner:
         grounded_rows: list[dict[str, Any]] | None = None,
     ) -> RouteAgentResponseOutput:
         """Keep agent prose, but force structured market data to come from tool/provider."""
-        default = 5 if route == AgentRoute.MARKET_BRIEF else 10
+        default = 10
         limit = _market_screen_limit(request.message, default=default)
         rows = grounded_rows or json.loads(json.dumps(self.market_screen_provider.screen_latest(limit), default=str))
         payload.result_type = "market_brief" if route == AgentRoute.MARKET_BRIEF else "top_stocks"
@@ -201,13 +221,13 @@ class RouteCrewRunner:
         )
         return str(response["choices"][0]["message"]["content"]).strip()
 
-    def _tools(self) -> list[BaseTool]:
+    def _tools(self, route: AgentRoute) -> list[BaseTool]:
         tools: list[BaseTool] = [
             _MarketScreenTool(provider=self.market_screen_provider),
             _SymbolLoadTool(provider=self.market_screen_provider),
             _MarketDiagnosticsTool(provider=self.market_screen_provider),
         ]
-        if self.streaming_observability_provider is not None:
+        if self.streaming_observability_provider is not None and _is_streaming_route(route):
             tools.append(_FreshnessTool(provider=self.streaming_observability_provider))
             tools.append(_PipelineHealthTool(provider=self.streaming_observability_provider))
         return tools
@@ -275,6 +295,19 @@ def _task_name(route: AgentRoute) -> str:
         AgentRoute.DATA_DIAGNOSTICS: "route_data_diagnostics_task",
         AgentRoute.STREAMING_FRESHNESS_CHECK: "route_streaming_freshness_task",
     }.get(route, "route_market_brief_task")
+
+
+def _is_streaming_route(route: AgentRoute) -> bool:
+    return route in {
+        AgentRoute.STREAMING_PIPELINE_HEALTH,
+        AgentRoute.STREAMING_FRESHNESS_CHECK,
+        AgentRoute.STREAMING_ALERT_REVIEW,
+        AgentRoute.STREAMING_SYMBOL_MONITOR,
+        AgentRoute.STREAMING_FEATURE_DRIFT,
+        AgentRoute.STREAMING_INGESTION_LAG,
+        AgentRoute.STREAMING_TOPIC_INSPECTION,
+        AgentRoute.STREAMING_QUALITY_INCIDENTS,
+    }
 
 
 def _extract_task_payload(task: Any | None) -> Any | None:
@@ -461,8 +494,93 @@ def _contains_user_facing_date(message: str) -> bool:
     return bool(re.search(r"\b(?:as_of|Datetime|latest as_of|as of)\b|\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:Z)?)?\b", message, flags=re.IGNORECASE))
 
 
+_SLIM_KEEP = frozenset({
+    "Symbol", "symbol", "rank", "latest_price", "RSI14", "RVOL20",
+    "risk_prob", "final_score", "sentiment_label", "sentiment_score",
+    "article_count", "top_drivers", "as_of", "Datetime", "Close",
+})
+
+
+def _slim_market_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{k: v for k, v in row.items() if k in _SLIM_KEEP} for row in rows]
+
+
 def _row_symbol(row: dict[str, Any]) -> str:
     return str(row.get("symbol") or row.get("Symbol") or "").upper()
+
+
+def _row_warnings(row: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    if not _row_symbol(row):
+        warnings.append("missing symbol")
+    if not (row.get("as_of") or row.get("Datetime")):
+        warnings.append("missing data date")
+    if row.get("final_score") is None:
+        warnings.append("missing score")
+    if row.get("latest_price") is None and row.get("Close") is None:
+        warnings.append("missing price")
+    return warnings
+
+
+def _symbol_comparison_message(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No comparison rows returned from ORCA data source. Check data diagnostics or run EOD pipeline. Not financial advice."
+    ranked = [row for row in rows if row.get("symbol")]
+    order = ", ".join(f"{row['rank']}) {row['symbol']}" for row in ranked)
+    strongest = ranked[0]
+    weakest = ranked[-1]
+    data_date = _latest_as_of(rows)
+    warnings = [warning for row in rows for warning in (row.get("warnings") or [])]
+    freshness = f" Data date: {data_date}." if data_date else " Data date unavailable."
+    warning_text = f" Warnings: {'; '.join(warnings[:3])}." if warnings else ""
+    return (
+        f"Ranked read: {order}.{freshness}{warning_text} "
+        f"Strongest: {strongest['symbol']} with score {_fmt_score(strongest.get('final_score'))}, "
+        f"price {_fmt_metric(strongest.get('latest_price'))}, momentum {_fmt_metric(strongest.get('RSI14'))}, "
+        f"trading activity {_fmt_metric(strongest.get('RVOL20'))}, and model risk {_fmt_percent(strongest.get('risk_prob'))}. "
+        f"Weakest: {weakest['symbol']} with score {_fmt_score(weakest.get('final_score'))} and model risk {_fmt_percent(weakest.get('risk_prob'))}. "
+        "Actionable read: favor strongest score/risk balance, but verify freshness and portfolio fit before acting. Not financial advice."
+    )
+
+
+def _symbol_comparison_message_is_grounded(message: str, rows: list[dict[str, Any]]) -> bool:
+    if not message or not rows:
+        return False
+    symbols = {_row_symbol(row) for row in rows if _row_symbol(row)}
+    mentioned = set(re.findall(r"\b[A-Z]{2,5}\b", message)) - {
+        "ORCA", "RSI", "RVOL", "AI", "API", "EPS", "ETF", "GDP", "CPI", "USD"
+    }
+    if mentioned and not mentioned.issubset(symbols):
+        return False
+    row_dates = {str(row.get("as_of") or "")[:10] for row in rows if row.get("as_of")}
+    message_dates = set(re.findall(r"\b\d{4}-\d{2}-\d{2}\b", message))
+    if message_dates and not message_dates.issubset(row_dates):
+        return False
+    return True
+
+
+def _fmt_metric(value: Any) -> str:
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _fmt_score(value: Any) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if numeric <= 1:
+        return f"{numeric * 100:.1f}/100"
+    return f"{numeric:.2f}"
+
+
+def _fmt_percent(value: Any) -> str:
+    try:
+        return f"{float(value):.2%}"
+    except (TypeError, ValueError):
+        return "n/a"
 
 
 def _row_number(row: dict[str, Any], *keys: str) -> float | None:
