@@ -161,6 +161,35 @@ def render_decision(decision: dict) -> None:
                 v = sq.get(key)
                 col.metric(label, f"{float(v):.0%}" if v is not None else "—")
 
+            citations = [str(c) for c in (decision.get("data_citations") or []) if c]
+            tool_calls = (decision.get("retrieved_tool_audit") or {}).get("tool_calls") or []
+            if citations or tool_calls:
+                st.markdown("**Source citations**")
+                if citations:
+                    refs = "".join(f"<li><code>{escape(ref)}</code></li>" for ref in citations[:8])
+                    st.markdown(f'<ul class="orca-source-list">{refs}</ul>', unsafe_allow_html=True)
+
+                rows = []
+                for t in tool_calls[:8]:
+                    source_refs = t.get("source_refs") or []
+                    refs = "<br>".join(f"<code>{escape(str(ref))}</code>" for ref in source_refs[:4]) or "—"
+                    rows.append(
+                        "<tr>"
+                        f"<td>{escape(str(t.get('tool', '—')))}</td>"
+                        f"<td>{escape(str(t.get('status', '—')))}</td>"
+                        f"<td>{refs}</td>"
+                        f"<td><code>{escape(str(t.get('result_hash', '—')))}</code></td>"
+                        "</tr>"
+                    )
+                if rows:
+                    st.markdown(
+                        '<table class="orca-source-table">'
+                        "<thead><tr><th>Tool</th><th>Status</th><th>Source refs</th><th>Result hash</th></tr></thead>"
+                        f"<tbody>{''.join(rows)}</tbody>"
+                        "</table>",
+                        unsafe_allow_html=True,
+                    )
+
     # Tool audit
     tool_audit = decision.get("retrieved_tool_audit") or {}
     tool_calls = tool_audit.get("tool_calls") or []

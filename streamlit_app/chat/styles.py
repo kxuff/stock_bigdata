@@ -275,6 +275,53 @@ def inject() -> None:
 .orca-rationale-table th:last-child,
 .orca-rationale-table td:last-child { border-right: 0; }
 
+.orca-source-list {
+  margin: 0.35rem 0 0.75rem 1.2rem;
+  color: var(--text);
+}
+.orca-source-list li { margin: 0.25rem 0; }
+.orca-source-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 0.84rem;
+}
+.orca-source-table th,
+.orca-source-table td {
+  padding: 0.65rem 0.75rem;
+  border-right: 1px solid rgba(148,163,184,0.10);
+  border-bottom: 1px solid rgba(148,163,184,0.10);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.orca-source-table th { color: var(--slate); font-weight: 500; }
+.orca-source-table th:nth-child(1),
+.orca-source-table td:nth-child(1) { width: 11rem; }
+.orca-source-table th:nth-child(2),
+.orca-source-table td:nth-child(2) { width: 6rem; }
+.orca-source-table th:nth-child(3),
+.orca-source-table td:nth-child(3) { width: auto; }
+.orca-source-table th:nth-child(4),
+.orca-source-table td:nth-child(4) { width: 12rem; }
+.orca-source-table tr:last-child td { border-bottom: 0; }
+.orca-source-table th:last-child,
+.orca-source-table td:last-child { border-right: 0; }
+.orca-source-table code,
+.orca-source-list code {
+  color: #bae6fd;
+  background: rgba(103,232,249,0.08);
+  border: 1px solid rgba(103,232,249,0.14);
+  border-radius: 5px;
+  padding: 0.05rem 0.25rem;
+}
+
 .status-dot {
   display: inline-block; width: 8px; height: 8px;
   border-radius: 50%; margin-right: 0.4rem;
