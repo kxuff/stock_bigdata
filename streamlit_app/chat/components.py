@@ -1,6 +1,7 @@
 """Render components for ORCA AI Chat."""
 from __future__ import annotations
 
+from html import escape
 from uuid import uuid4
 
 import streamlit as st
@@ -79,13 +80,26 @@ def render_decision(decision: dict) -> None:
 """, unsafe_allow_html=True)
 
     if decision.get("requires_human_review"):
-        st.warning("⚠️ Human review required before any action.")
+        st.markdown(
+            '<div class="orca-alert orca-alert-warn">'
+            '<span class="orca-alert-icon">⚠️</span>'
+            '<div>Human review required before any action.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # Summary / advisor note
     summary = decision.get("summary", "")
     if summary:
         st.markdown("**Advisor note**")
-        st.info(f"💬 {summary}")
+        safe_summary = escape(str(summary)).replace("\n", "<br>")
+        st.markdown(
+            '<div class="orca-alert orca-alert-info">'
+            '<span class="orca-alert-icon">💬</span>'
+            f'<div>{safe_summary}</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # Signals / detailed evidence. Keep user-facing answer prose-first; details collapsed.
     supporting = decision.get("supporting_signals") or decision.get("supporting_evidence") or []
@@ -106,12 +120,25 @@ def render_decision(decision: dict) -> None:
     rationale = [r for r in (decision.get("decision_rationale") or []) if isinstance(r, dict)]
     if rationale:
         with st.expander("📊 Decision rationale", expanded=False):
-            st.table([{
-                "Factor":      r.get("factor", "—"),
-                "Stance":      r.get("stance", "—"),
-                "Weight":      r.get("weight", "—"),
-                "Explanation": r.get("explanation", ""),
-            } for r in rationale[:6]])
+            rows = []
+            for r in rationale[:6]:
+                rows.append(
+                    "<tr>"
+                    f"<td>{escape(str(r.get('factor', '—')))}</td>"
+                    f"<td>{escape(str(r.get('stance', '—')))}</td>"
+                    f"<td>{escape(str(r.get('weight', '—')))}</td>"
+                    f"<td>{escape(str(r.get('explanation', '')))}</td>"
+                    "</tr>"
+                )
+            st.markdown(
+                '<table class="orca-rationale-table">'
+                "<thead><tr>"
+                "<th>Factor</th><th>Stance</th><th>Weight</th><th>Explanation</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody>"
+                "</table>",
+                unsafe_allow_html=True,
+            )
 
     # Risk warnings
     warnings = decision.get("risk_warnings") or []

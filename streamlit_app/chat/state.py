@@ -2,20 +2,31 @@
 from __future__ import annotations
 import base64
 import json
+import os
+from pathlib import Path
+from uuid import uuid4
 from datetime import UTC, datetime, timedelta
 
 import streamlit as st
 
 
+CHAT_STORE_DIR = Path(__file__).resolve().parents[2] / ".streamlit_chat_state"
+CHAT_REDIS_URL = os.getenv("STREAMLIT_REDIS_URL") or os.getenv("ORCA_REDIS_URL") or "redis://localhost:6379/0"
+CHAT_TTL_SECONDS = int(os.getenv("STREAMLIT_CHAT_TTL_SECONDS", str(60 * 60 * 24 * 7)))
+
+
 # ── Init ─────────────────────────────────────────────────────────────────────
 
 def init() -> None:
+    chat_id = _ensure_chat_id()
+    persisted = _load_chat(chat_id)
     defaults: dict = {
-        "messages": [],
-        "completed_orca_message_ids": set(),
+        "messages": persisted.get("messages", []),
+        "completed_orca_message_ids": set(persisted.get("completed_orca_message_ids", [])),
         "submit_retry": None,
         "orca_backend_status": None,
         "pending_orca_jobs": None,
+        "orca_chat_id": chat_id,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -26,18 +37,22 @@ def init() -> None:
 
 def add_user(content: str) -> None:
     st.session_state.messages.append({"role": "user", "content": content})
+    save_chat()
 
 
 def add_assistant(content: str) -> None:
     st.session_state.messages.append({"role": "assistant", "content": content})
+    save_chat()
 
 
 def add_decision(decision: dict) -> None:
     st.session_state.messages.append({"role": "assistant", "type": "decision", "decision": decision})
+    save_chat()
 
 
 def add_agent_response(response: dict) -> None:
     st.session_state.messages.append({"role": "assistant", "type": "agent_response", "response": response})
+    save_chat()
 
 
 def add_agent_response_once(message_id: str, response: dict) -> None:
@@ -45,6 +60,7 @@ def add_agent_response_once(message_id: str, response: dict) -> None:
         return
     add_agent_response(response)
     st.session_state.completed_orca_message_ids.add(message_id)
+    save_chat()
 
 
 def add_once(message_id: str, content: str) -> None:
@@ -52,6 +68,7 @@ def add_once(message_id: str, content: str) -> None:
         return
     add_assistant(content)
     st.session_state.completed_orca_message_ids.add(message_id)
+    save_chat()
 
 
 def add_decision_once(message_id: str, decision: dict) -> None:
@@ -59,11 +76,83 @@ def add_decision_once(message_id: str, decision: dict) -> None:
         return
     add_decision(decision)
     st.session_state.completed_orca_message_ids.add(message_id)
+    save_chat()
 
 
 def clear_chat() -> None:
     st.session_state.messages = []
     st.session_state.completed_orca_message_ids = set()
+    save_chat()
+
+
+def save_chat() -> None:
+    chat_id = st.session_state.get("orca_chat_id") or _ensure_chat_id()
+    payload = {
+        "messages": st.session_state.get("messages", []),
+        "completed_orca_message_ids": sorted(st.session_state.get("completed_orca_message_ids", set())),
+        "updated_at": utc_now().isoformat(),
+    }
+    raw = json.dumps(payload, ensure_ascii=False)
+    client = _redis_client()
+    if client is not None:
+        try:
+            client.setex(_chat_key(chat_id), CHAT_TTL_SECONDS, raw)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    CHAT_STORE_DIR.mkdir(parents=True, exist_ok=True)
+    _chat_path(chat_id).write_text(raw, encoding="utf-8")
+
+
+def _ensure_chat_id() -> str:
+    chat_id = st.query_params.get("orca_chat")
+    if not chat_id:
+        chat_id = uuid4().hex
+        st.query_params["orca_chat"] = chat_id
+    return chat_id
+
+
+def _chat_path(chat_id: str) -> Path:
+    safe_id = "".join(ch for ch in chat_id if ch.isalnum() or ch in {"-", "_"})[:64]
+    return CHAT_STORE_DIR / f"{safe_id}.json"
+
+
+def _chat_key(chat_id: str) -> str:
+    safe_id = "".join(ch for ch in chat_id if ch.isalnum() or ch in {"-", "_"})[:64]
+    return f"streamlit:orca_chat:{safe_id}"
+
+
+def _redis_client():
+    try:
+        from redis import Redis
+    except ImportError:
+        return None
+    try:
+        client = Redis.from_url(CHAT_REDIS_URL, decode_responses=True)
+        client.ping()
+        return client
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _load_chat(chat_id: str) -> dict:
+    client = _redis_client()
+    if client is not None:
+        try:
+            raw = client.get(_chat_key(chat_id))
+            if raw:
+                data = json.loads(raw)
+                return data if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001
+            pass
+    path = _chat_path(chat_id)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────

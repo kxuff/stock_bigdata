@@ -177,6 +177,32 @@ def inject() -> None:
 .orca-card.watch { border-left: 3px solid #67e8f9; }
 .orca-card.wait  { border-left: 3px solid #64748b; }
 
+.orca-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0.75rem 0 1rem 0;
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius-sm);
+  line-height: 1.55;
+  color: var(--text);
+}
+.orca-alert-icon {
+  flex: 0 0 auto;
+  line-height: 1.55;
+}
+.orca-alert-warn {
+  background: rgba(252,211,77,0.20);
+  border: 1px solid rgba(252,211,77,0.24);
+}
+.orca-alert-info {
+  background: rgba(59,130,246,0.24);
+  border: 1px solid rgba(59,130,246,0.20);
+  color: #60a5fa;
+}
+
 .rec-badge {
   display: inline-flex; align-items: center; gap: 0.35rem;
   padding: 0.3rem 0.85rem;
@@ -209,6 +235,45 @@ def inject() -> None:
 }
 .signal-chip.support  { background: var(--emerald-dim); color: var(--emerald); }
 .signal-chip.conflict { background: var(--rose-dim);    color: var(--rose);    }
+
+.orca-rationale-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.orca-rationale-table th,
+.orca-rationale-table td {
+  padding: 0.75rem 0.8rem;
+  border-right: 1px solid rgba(148,163,184,0.10);
+  border-bottom: 1px solid rgba(148,163,184,0.10);
+  text-align: left;
+  vertical-align: top;
+}
+.orca-rationale-table th {
+  color: var(--slate);
+  font-weight: 500;
+}
+.orca-rationale-table th:nth-child(1),
+.orca-rationale-table td:nth-child(1) { width: 8.5rem; }
+.orca-rationale-table th:nth-child(2),
+.orca-rationale-table td:nth-child(2) { width: 7rem; }
+.orca-rationale-table th:nth-child(3),
+.orca-rationale-table td:nth-child(3) { width: 6rem; }
+.orca-rationale-table th:nth-child(4),
+.orca-rationale-table td:nth-child(4) {
+  width: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.orca-rationale-table tr:last-child td { border-bottom: 0; }
+.orca-rationale-table th:last-child,
+.orca-rationale-table td:last-child { border-right: 0; }
 
 .status-dot {
   display: inline-block; width: 8px; height: 8px;
