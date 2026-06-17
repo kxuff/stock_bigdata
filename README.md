@@ -1,108 +1,118 @@
-# Stock Big Data Local Run Guide
+# Stock Big Data
 
-This repository runs a local stock data lakehouse and advisory demo: EOD ingestion, ML features/predictions, FinBERT sentiment, valuation context, Iceberg/Nessie/MinIO storage, and live ORCA advisory API.
+Dự án demo lakehouse cho chứng khoán Mỹ: ingest dữ liệu EOD từ yfinance, xử lý bằng Spark, lưu bảng Iceberg trên Nessie/MinIO, chạy ML inference, tạo sentiment/valuation context và phục vụ khuyến nghị đầu tư qua ORCA multi-agent advisory API. Repo cũng có Streamlit UI để xem dashboard, chat và AI stock picks.
 
-## Requirements
+> Đây là môi trường dev/local. Không commit API key, token LLM hoặc secret thật vào repo.
 
-- Docker Desktop / Docker Compose
-- Python on host for tests
-- `uv` for ORCA local development
-- Running FinBERT HTTP API
-- Running 9router gateway at `http://localhost:20128/v1`
+## Kiến trúc tổng quan
 
-Sentiment requires FinBERT. If `FINBERT_API_URL` is missing or unreachable, the EOD pipeline fails fast. There is no lexical sentiment fallback.
+```text
+yfinance / FinBERT
+  -> Airflow EOD DAG
+  -> Spark feature engineering + ML inference
+  -> Iceberg tables trên Nessie catalog + MinIO object storage
+  -> ORCA FastAPI + worker đọc dữ liệu bigdata
+  -> Streamlit UI / advisory clients
+```
 
-## Start the stack
+Thành phần chính:
+
+- `airflow/dags/us_stock_eod_inference.py`: DAG EOD sau giờ đóng cửa của thị trường Mỹ.
+- `airflow/plugins/eod_inference/`: extract, clean, feature, inference, save và ORCA context.
+- `spark_jobs/`: Spark jobs và feature contract dùng chung với notebook/model.
+- `data/models/`: model artifact local, mặc định `model_a.joblib` và `model_c.joblib`.
+- `orca-agent-advisory/`: FastAPI + CrewAI advisory layer.
+- `streamlit_app/`: UI mock/local-first cho dashboard, chat và AI stock picks.
+- `docs/`: runbook và tài liệu chi tiết hơn.
+
+## Yêu cầu
+
+- Docker Desktop hoặc Docker Compose.
+- Python trên host để chạy test/UI local.
+- `uv` nếu phát triển ORCA local.
+- FinBERT HTTP API đang chạy và set `FINBERT_API_URL`.
+- LLM gateway tương thích OpenAI API, mặc định `http://localhost:20128/v1` cho ORCA.
+
+Sentiment phụ thuộc FinBERT. Nếu `FINBERT_API_URL` thiếu hoặc không truy cập được, EOD pipeline sẽ fail fast; dự án không còn lexical sentiment fallback.
+
+## Chạy stack local
 
 ```bash
 docker compose up -d
 docker compose ps
 ```
 
-Core services:
+Service/URL hay dùng:
 
-```text
-airflow-webserver
-airflow-scheduler
-spark-master
-spark-worker
-minio
-nessie
-postgres-airflow
-orca-api
+| Thành phần      | URL                             |
+| --------------- | ------------------------------- |
+| Airflow         | <http://localhost:8085>         |
+| Spark master UI | <http://localhost:8080>         |
+| Spark worker UI | <http://localhost:8084>         |
+| MinIO console   | <http://localhost:9001>         |
+| Nessie API      | <http://localhost:19120/api/v2> |
+| Kafka UI        | <http://localhost:8086>         |
+| ORCA API        | <http://localhost:8000>         |
+
+Tài khoản local mặc định:
+
+| Dịch vụ | User      | Password   |
+| ------- | --------- | ---------- |
+| Airflow | `airflow` | `airflow`  |
+| MinIO   | `admin`   | `password` |
+
+## Cấu hình secret và endpoint
+
+Với Docker Compose, ORCA đọc biến môi trường từ `orca-agent-advisory/.env` qua `env_file`. Đặt secret LLM trong file này hoặc trong môi trường runtime của container:
+
+```env
+NINEROUTER_KEY=sk-...
 ```
 
-Useful URLs:
+Nếu chạy ORCA trực tiếp trên host, set biến trong shell hiện tại.
 
-```text
-Airflow: http://localhost:8085
-Spark master UI: http://localhost:8080
-Spark worker UI: http://localhost:8084
-MinIO: http://localhost:9001
-Nessie API: http://localhost:19120/api/v2
-ORCA API: http://localhost:8000
-```
-
-## Streamlit placeholder UI
-
-Run the mock-first multipage UI:
-
-```bash
-pip install -r streamlit_app/requirements.txt
-streamlit run streamlit_app/app.py
-```
-
-Pages include Dashboard, AI Chat, and AI Stock Picks. No backend calls run by default.
-
-## Configure secrets
-
-Do not commit API keys. Set the 9router key in the current shell before starting ORCA:
+PowerShell:
 
 ```powershell
 $env:NINEROUTER_KEY="sk-..."
+$env:FINBERT_API_URL="https://your-finbert-url"
+$env:FINBERT_API_TIMEOUT="10"
 ```
 
-Linux/macOS:
+Bash:
 
 ```bash
 export NINEROUTER_KEY="sk-..."
+export FINBERT_API_URL="https://your-finbert-url"
+export FINBERT_API_TIMEOUT="10"
 ```
 
-`docker-compose.yml` passes it as:
-
-```yaml
-NINEROUTER_KEY: ${NINEROUTER_KEY:-dummy}
-LLM_BASE_URL: http://host.docker.internal:20128/v1
-```
-
-## Check FinBERT
-
-Replace URL with your running FinBERT endpoint:
+Kiểm tra FinBERT:
 
 ```bash
-curl -H 'ngrok-skip-browser-warning: 1' https://your-finbert-url/health
+curl -H 'ngrok-skip-browser-warning: 1' "$FINBERT_API_URL/health"
 ```
 
 Expected shape:
 
 ```json
-{"status":"ok","model":"ProsusAI/finbert","device":"cuda"}
+{ "status": "ok", "model": "ProsusAI/finbert", "device": "cuda" }
 ```
 
-## First EOD run
+## EOD pipeline
 
-Use initial backfill on the first run because feature engineering needs lookback history.
+DAG `us_stock_eod_inference` gồm các stage:
 
-You can run the full reset/bootstrap flow with the helper script:
-
-```powershell
-.\scripts\reset_and_run_local.ps1 `
-  -ResetDocker `
-  -RemoveLocalData `
-  -NinerouterKey 'sk-...'
+```text
+extract_eod_prices
+-> clean_validate_prices
+-> engineer_features
+-> build_agent_context
+-> run_ml_inference
+-> save_predictions
 ```
 
-The script resets optional local state, starts Docker services, checks FinBERT, runs EOD initial load, and starts ORCA API. Any failed step throws and stops the script.
+Lần chạy đầu tiên cần backfill vì feature engineering cần đủ lookback history.
 
 PowerShell:
 
@@ -113,7 +123,7 @@ docker compose exec -T `
   -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' `
   -e US_STOCK_SPARK_EXECUTOR_CORES='1' `
   -e US_STOCK_SPARK_CORES_MAX='1' `
-  -e US_STOCK_EOD_SYMBOLS='AAPL' `
+  -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' `
   -e US_STOCK_INITIAL_LOAD='true' `
   -e US_STOCK_BACKFILL_CALENDAR_DAYS='500' `
   -e FINBERT_API_URL='https://your-finbert-url' `
@@ -130,7 +140,7 @@ docker compose exec -T \
   -e US_STOCK_SPARK_EXECUTOR_MEMORY='1g' \
   -e US_STOCK_SPARK_EXECUTOR_CORES='1' \
   -e US_STOCK_SPARK_CORES_MAX='1' \
-  -e US_STOCK_EOD_SYMBOLS='AAPL' \
+  -e US_STOCK_EOD_SYMBOLS='AAPL,MSFT,NVDA' \
   -e US_STOCK_INITIAL_LOAD='true' \
   -e US_STOCK_BACKFILL_CALENDAR_DAYS='500' \
   -e FINBERT_API_URL='https://your-finbert-url' \
@@ -138,24 +148,32 @@ docker compose exec -T \
   airflow-webserver python /opt/airflow/plugins/eod_inference/run_eod_pipeline.py --run-date 2026-05-29
 ```
 
-Pipeline stages:
+Sau khi đã có history, bỏ 2 flag này để chạy incremental:
 
-```text
-extract_eod_prices
-→ clean_validate_prices
-→ engineer_features
-→ run_ml_inference
-→ save_predictions
+```bash
+-e US_STOCK_INITIAL_LOAD='true'
+-e US_STOCK_BACKFILL_CALENDAR_DAYS='500'
 ```
 
-Expected manifest fields:
+Bảng Iceberg được ghi:
+
+| Layer             | Table mặc định                            |
+| ----------------- | ----------------------------------------- |
+| Raw prices        | `nessie.raw.us_stock_eod_prices`          |
+| Curated prices    | `nessie.curated.us_stock_eod_prices`      |
+| ML features       | `nessie.ml_ready.stock_price_features`    |
+| Predictions       | `nessie.ml_ready.stock_predictions_v2`    |
+| Sentiment context | `nessie.ml_ready.stock_sentiment_context` |
+| Valuation context | `nessie.ml_ready.stock_valuation_context` |
+
+Manifest output thường có các trường:
 
 ```json
 {
-  "prediction_rows": 1,
-  "orca_context_rows": 1,
-  "sentiment_rows": 1,
-  "valuation_rows": 1,
+  "prediction_rows": 3,
+  "orca_context_rows": 3,
+  "sentiment_rows": 3,
+  "valuation_rows": 3,
   "orca_context_includes": [
     "market_features",
     "ml_predictions",
@@ -166,45 +184,31 @@ Expected manifest fields:
 }
 ```
 
-## Iceberg tables written
+## ORCA advisory API
 
-```text
-nessie.ml_ready.stock_predictions
-nessie.ml_ready.stock_price_features
-nessie.curated.us_stock_eod_prices
-nessie.ml_ready.stock_sentiment_context
-nessie.ml_ready.stock_valuation_context
-```
+ORCA được khai báo trong `docker-compose.yml` với 2 service:
 
-ORCA reads these tables directly. It does not use the removed deterministic `orca_upstream.json` CLI path.
+- `orca-api`: FastAPI endpoint.
+- `orca-worker`: background worker cho job queue.
 
-## Later EOD runs
-
-After history exists, remove these first-run flags:
-
-```bash
--e US_STOCK_INITIAL_LOAD='true'
--e US_STOCK_BACKFILL_CALENDAR_DAYS='500'
-```
-
-Keep `FINBERT_API_URL` set.
-
-## Run ORCA API
-
-ORCA is included in `docker-compose.yml` as `orca-api`.
+Chạy/rerun ORCA:
 
 ```powershell
-$env:NINEROUTER_KEY="sk-..."
-docker compose up -d --build orca-api
+docker compose up -d --build orca-api orca-worker
 ```
 
-The compose service uses local Spark inside the ORCA container for lower-latency Iceberg reads:
+Compose mặc định cấu hình ORCA đọc Iceberg bằng provider `bigdata`:
 
-```yaml
-ORCA_SPARK_MASTER: local[2]
+```env
+ORCA_TOOL_RESULT_PROVIDER=bigdata
+ORCA_ML_PREDICTION_TABLE=ml_ready.stock_predictions_v2
+ORCA_ML_FEATURE_TABLE=ml_ready.stock_price_features
+ORCA_CURATED_PRICE_TABLE=curated.us_stock_eod_prices
+ORCA_SENTIMENT_TABLE=ml_ready.stock_sentiment_context
+ORCA_VALUATION_TABLE=ml_ready.stock_valuation_context
 ```
 
-Call the API:
+Gọi advisory API:
 
 ```powershell
 $body = @'
@@ -240,7 +244,7 @@ Invoke-RestMethod `
   -TimeoutSec 600
 ```
 
-Expected response fields:
+Response chính:
 
 ```text
 symbol
@@ -253,26 +257,106 @@ conflicting_signals
 risk_warnings
 ```
 
-ORCA live advisory can be slow because CrewAI runs multiple LLM-backed tasks.
+ORCA live advisory có thể chậm vì CrewAI chạy nhiều task LLM-backed.
 
-## Run tests
+## Streamlit UI
 
-ORCA provider tests:
+Chạy UI local:
 
 ```bash
-cd orca-agent-advisory
-uv run --python 3.12 pytest tests/test_bigdata_ml_provider.py
+pip install -r streamlit_app/requirements.txt
+streamlit run streamlit_app/app.py
 ```
 
-EOD sentiment tests:
+Pages:
 
-```powershell
-$env:PYTHONPATH='airflow/plugins'
-python -m pytest tests/test_agent_context.py
-```
+- Dashboard
+- AI Chat
+- AI Stock Picks
+
+AI Stock Picks có thể đọc output local của EOD pipeline, hoặc đọc từ endpoint nếu set `ML_INFERENCE_PICKS_URL`.
+
+## Biến môi trường quan trọng
+
+| Biến                              | Mặc định                                  | Ghi chú                                                  |
+| --------------------------------- | ----------------------------------------- | -------------------------------------------------------- |
+| `US_STOCK_EOD_SYMBOLS`            | default symbol list trong code            | Giới hạn universe để demo nhanh, ví dụ `AAPL,MSFT,NVDA`. |
+| `US_STOCK_EOD_DATA_DIR`           | `/opt/airflow/data/eod_batch`             | Thư mục staging trong container.                         |
+| `US_STOCK_INITIAL_LOAD`           | `false`                                   | Set `true` cho first backfill.                           |
+| `US_STOCK_BACKFILL_CALENDAR_DAYS` | `500`                                     | Số ngày calendar để backfill.                            |
+| `US_STOCK_MIN_LOOKBACK_DAYS`      | `260`                                     | Lookback tối thiểu cho feature.                          |
+| `US_STOCK_MODEL_A_PATH`           | `/opt/airflow/data/models/model_a.joblib` | Model return/pick.                                       |
+| `US_STOCK_MODEL_C_PATH`           | `/opt/airflow/data/models/model_c.joblib` | Risk model optional.                                     |
+| `FINBERT_API_URL`                 | set qua env/compose                       | Bắt buộc cho sentiment.                                  |
+| `NINEROUTER_KEY`                  | none                                      | Secret cho LLM gateway.                                  |
+| `LLM_BASE_URL`                    | `http://host.docker.internal:20128/v1`    | OpenAI-compatible gateway cho ORCA.                      |
+
+## Test và validation
 
 Compile EOD plugins:
 
 ```bash
 python -m compileall airflow/plugins/eod_inference
 ```
+
+EOD/agent context test:
+
+```powershell
+$env:PYTHONPATH='airflow/plugins'
+python -m pytest tests/test_agent_context.py
+```
+
+ORCA tests:
+
+```bash
+cd orca-agent-advisory
+uv run pytest
+```
+
+Một test riêng cho Big Data provider:
+
+```bash
+cd orca-agent-advisory
+uv run --python 3.12 pytest tests/test_bigdata_ml_provider.py
+```
+
+## Troubleshooting nhanh
+
+Nếu Spark bị treo hoặc không có resource:
+
+```bash
+docker compose restart spark-master spark-worker
+```
+
+Nếu gặp lỗi không đủ lookback history:
+
+```text
+Not enough lookback history for feature inference. Required 260
+```
+
+Chạy lại với:
+
+```bash
+-e US_STOCK_INITIAL_LOAD='true'
+-e US_STOCK_BACKFILL_CALENDAR_DAYS='500'
+```
+
+Nếu Airflow webserver unhealthy nhưng cần chạy command manual, thử restart:
+
+```bash
+docker compose restart airflow-webserver airflow-scheduler
+```
+
+Nếu ORCA không thấy prediction mới, kiểm tra table name đang dùng là:
+
+```text
+ml_ready.stock_predictions_v2
+```
+
+## Tài liệu thêm
+
+- `docs/end_to_end_local_runbook.md`: runbook end-to-end local.
+- `docs/us_stock_eod_batch_airflow.md`: chi tiết DAG, feature contract và Airflow variables.
+- `docs/ml_streaming_architecture.md`: kiến trúc streaming/ML.
+- `docs/ai_chat_production_checklist.md`: checklist cho AI chat.
+- `orca-agent-advisory/docs/technical_spec.md`: technical spec của ORCA advisory layer.
